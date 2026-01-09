@@ -1,5 +1,36 @@
 # synthetic-spread-arbitrage
 
+Project Structure
+synthetic-optimizer/
+│
+├── data/
+│   ├── raw/                    # Raw downloaded data
+│   ├── processed/              # Cleaned data
+│   └── results/                # Model outputs
+│
+├── src/
+│   ├── __init__.py
+│   ├── data_pipeline.py        # Data collection & cleaning
+│   ├── synthetic_pricer.py     # Synthetic vs cash economics
+│   ├── statistical_models.py   # Regression, time series, etc.
+│   ├── risk_analytics.py       # VaR, Monte Carlo, Greeks
+│   ├── backtester.py           # Strategy backtesting
+│   └── visualizer.py           # Charts and dashboards
+│
+├── notebooks/
+│   ├── 01_data_exploration.ipynb
+│   ├── 02_statistical_analysis.ipynb
+│   └── 03_results_presentation.ipynb
+│
+├── tests/
+│   └── test_models.py
+│
+├── config.py                   # Configuration parameters
+├── main.py                     # Main execution script
+├── requirements.txt
+└── README.md
+
+
 # **Detailed Component Breakdown**
 
 Let me break down each module of your project with examples, formulas, and step-by-step explanations.
