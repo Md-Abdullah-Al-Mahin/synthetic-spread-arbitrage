@@ -1,16 +1,27 @@
-# Configuration for the synthetic optimizer project
+# Data settings for fetch_market_data()
+DATA_CONFIG = {
+    'tickers': ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA'],  # Just 5 stocks for testing
+    'start_date': '2023-01-01',
+    'end_date': '2025-12-31',
+    'benchmark': 'SPY',
+}
 
-# Data settings
-DEFAULT_TICKERS = [
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA',
-    'NVDA', 'META', 'JPM', 'V', 'WMT'
-]
+# Path settings
+PATH_CONFIG = {
+    'raw_data_path': 'data/raw/',
+    'processed_data_path': 'data/processed/',
+}
 
-DEFAULT_START_DATE = '2023-01-01'
-DEFAULT_END_DATE = '2025-12-31'
+# Synthetic financing parameters
+FINANCING_CONFIG = {
+    'sofr_rate': 0.045,  # 4.5% SOFR
+    'base_spread': 0.0015,  # 15 bps base spread
+    'vol_coefficient': 0.002,  # 20 bps per vol point
+    'financing_days_per_year': 360,  # Actual/360 convention
+}
 
-# Directory settings
-DATA_DIR = 'data'
-RAW_DATA_DIR = 'data/raw'
-PROCESSED_DATA_DIR = 'data/processed'
-RESULTS_DIR = 'data/results'
+# Trading parameters
+TRADING_CONFIG = {
+    'notional_per_trade': 100000,  # $100k per trade
+    'transaction_cost': 0.001,  # 0.1% per trade
+}
