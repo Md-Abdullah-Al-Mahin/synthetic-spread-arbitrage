@@ -5,7 +5,6 @@ import sys
 import os
 import config
 
-# Add config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -33,11 +32,6 @@ class SyntheticPricer:
         time_factor = days / self.days_per_year
         total_cost = total_rate * notional * time_factor
 
-        print(f"Financing Cost:")
-        print(f"  Notional: ${notional:,.2f} | Days: {days}")
-        print(f"  Rate: {total_rate:.2%} (SOFR: {sofr_rate:.2%} + Spread: {spread:.2%})")
-        print(f"  Total: ${total_cost:,.2f} | Daily: ${total_cost / days:,.2f}")
-
         return {
             'total_cost': total_cost,
             'daily_cost': total_cost / days,
@@ -58,14 +52,6 @@ class SyntheticPricer:
             results.append(cost_data)
 
         df = pd.DataFrame(results).set_index('ticker')
-        total_cost = df['total_cost'].sum()
-        total_notional = df['notional'].sum()
-
-        print(f"\nSummary for {len(notionals)} positions:")
-        print(f"  Total Notional: ${total_notional:,.2f}")
-        print(f"  Total Cost: ${total_cost:,.2f}")
-        print(f"  Avg Rate: {(total_cost / total_notional) * (self.days_per_year / days):.2%}")
-
         return df
 
     def estimate_spread_from_volatility(self,
@@ -77,26 +63,12 @@ class SyntheticPricer:
         base_spread = base_spread or self.base_spread
         vol_coefficient = vol_coefficient or self.vol_coefficient
 
-        print(f"Spread Estimation:")
-        print(f"  Base: {base_spread:.2%} | Vol Coef: {vol_coefficient:.2%}")
-
         if isinstance(volatility, (int, float)):
-            spread = base_spread + (vol_coefficient * volatility)
-            print(f"  Vol: {volatility:.1%} → Spread: {spread:.2%}")
-            return spread
-
-        elif isinstance(volatility, pd.Series):
-            spread = base_spread + (vol_coefficient * volatility)
-            print(f"  Vol Range: {volatility.min():.1%}-{volatility.max():.1%}")
-            print(f"  Spread Range: {spread.min():.2%}-{spread.max():.2%}")
-            return spread
-
-        elif isinstance(volatility, pd.DataFrame):
-            spread = base_spread + (vol_coefficient * volatility)
-            print(f"  Shape: {volatility.shape} → {spread.shape[1]} tickers")
-            return spread
-
-        raise TypeError(f"Unsupported type: {type(volatility)}")
+            return base_spread + (vol_coefficient * volatility)
+        elif isinstance(volatility, (pd.Series, pd.DataFrame)):
+            return base_spread + (vol_coefficient * volatility)
+        else:
+            raise TypeError(f"Unsupported type: {type(volatility)}")
 
     def calculate_spread_statistics(self,
                                     volatility: pd.DataFrame,
@@ -112,20 +84,16 @@ class SyntheticPricer:
 
             if len(ticker_spreads) > 0:
                 stats_data.append({
-                    'Ticker': ticker,
-                    'Current Vol': ticker_vols.iloc[-1] * 100,
-                    'Current Spread': ticker_spreads.iloc[-1] * 100,
-                    'Mean Spread': ticker_spreads.mean() * 100,
-                    'Min Spread': ticker_spreads.min() * 100,
-                    'Max Spread': ticker_spreads.max() * 100,
-                    'Spread Range': (ticker_spreads.max() - ticker_spreads.min()) * 100,
-                    'Spread/Vol Ratio': ticker_spreads.mean() / ticker_vols.mean() if ticker_vols.mean() > 0 else 0
+                    'ticker': ticker,
+                    'current_vol': ticker_vols.iloc[-1],
+                    'current_spread': ticker_spreads.iloc[-1],
+                    'mean_spread': ticker_spreads.mean(),
+                    'min_spread': ticker_spreads.min(),
+                    'max_spread': ticker_spreads.max(),
+                    'spread_range': ticker_spreads.max() - ticker_spreads.min()
                 })
 
-        stats_df = pd.DataFrame(stats_data).set_index('Ticker')
-        print("\nSpread Statistics:")
-        print(stats_df.round(3))
-        return stats_df
+        return pd.DataFrame(stats_data).set_index('ticker')
 
     def calculate_dividend_impact(self,
                                   prices: pd.DataFrame,
@@ -133,8 +101,6 @@ class SyntheticPricer:
                                   tax_rate: float = 0.30,
                                   position_days: int = 90) -> pd.DataFrame:
         """Calculate dividend impact difference between synthetic and cash positions"""
-        print(f"Dividend Impact Analysis (Tax: {tax_rate:.0%})")
-
         common_tickers = list(set(prices.columns) & set(dividends.columns))
         if not common_tickers:
             print("No common tickers found")
@@ -162,7 +128,6 @@ class SyntheticPricer:
 
                 notional = 100000
                 annual_advantage = advantage * notional
-                daily_advantage = annual_advantage / 365
                 position_advantage = annual_advantage * (position_days / 365)
 
                 results.append({
@@ -174,11 +139,8 @@ class SyntheticPricer:
                     'synthetic_yield': synthetic_yield,
                     'advantage': advantage,
                     'annual_advantage': annual_advantage,
-                    'daily_advantage': daily_advantage,
                     'position_advantage': position_advantage
                 })
-
-                print(f"{ticker}: Yield: {dividend_yield:.2%} → Adv: {advantage:.2%} (${annual_advantage:.0f}/yr)")
 
             except Exception as e:
                 print(f"Error with {ticker}: {str(e)[:50]}")
@@ -188,14 +150,8 @@ class SyntheticPricer:
             return pd.DataFrame()
 
         result_df = pd.DataFrame(results).set_index('ticker')
-        sorted_df = result_df.sort_values('advantage', ascending=False)
-
-        print("\nTop Advantages:")
-        for i, (ticker, row) in enumerate(sorted_df.head().iterrows(), 1):
-            print(f"{i}. {ticker}: {row['advantage']:.2%} (${row['annual_advantage']:.0f})")
-
-        total_advantage = result_df['annual_advantage'].sum()
-        print(f"\nTotal Annual Advantage: ${total_advantage:.0f}")
+        
+        print(f"Total annual advantage: ${result_df['annual_advantage'].sum():,.0f}")
 
         return result_df
 
@@ -209,11 +165,9 @@ class SyntheticPricer:
                                      base_spread: Optional[float] = None,
                                      vol_coefficient: Optional[float] = None) -> Dict[str, float]:
         """Calculate net financing cost including dividend impact"""
-        print(f"\nNet Financing Cost Analysis")
-        print("-" * 40)
-
-        spread = base_spread or self.estimate_spread_from_volatility(volatility, base_spread, vol_coefficient)
-        financing_data = self.calculate_financing_cost(notional=notional, days=days, spread=spread, sofr_rate=sofr_rate)
+        spread = self.estimate_spread_from_volatility(volatility, base_spread, vol_coefficient)
+        financing_data = self.calculate_financing_cost(notional=notional, days=days, spread=spread,
+                                                       sofr_rate=sofr_rate)
 
         cash_yield = dividend_yield * (1 - tax_rate)
         synthetic_yield = dividend_yield
@@ -222,14 +176,6 @@ class SyntheticPricer:
         position_advantage = annual_advantage * (days / 365)
 
         net_cost = financing_data['total_cost'] - position_advantage
-
-        print(f"\nDividend Impact:")
-        print(f"  Yield: {dividend_yield:.2%} → Cash: {cash_yield:.2%} → Synth: {synthetic_yield:.2%}")
-        print(f"  Advantage: {advantage:.2%} (${position_advantage:.0f} for position)")
-
-        print(f"\nNet Cost:")
-        print(f"  Gross: ${financing_data['total_cost']:.0f} - Dividend: ${position_advantage:.0f}")
-        print(f"  Net: ${net_cost:.0f}")
 
         return {
             'gross_financing_cost': financing_data['total_cost'],
@@ -260,21 +206,16 @@ class SyntheticPricer:
         if dividend_yield is None and dividends is not None and ticker in dividends.columns:
             dividend_series = dividends[ticker].dropna()
             if not dividend_series.empty:
-                current_date = dividends.index[-1] if not dividends.empty else pd.Timestamp.now()
+                current_date = dividends.index[-1]
                 one_year_ago = current_date - pd.DateOffset(years=1)
                 recent_dividends = dividend_series[dividend_series.index >= one_year_ago]
                 annual_dividend = recent_dividends.sum()
                 dividend_yield = annual_dividend / price if price > 0 else 0
         dividend_yield = dividend_yield or 0.0
 
-        print(f"\nParameters:")
-        print(f"  Ticker: {ticker} | Price: ${price:.2f} | Notional: ${notional:,.0f}")
-        print(f"  Vol: {volatility:.1%} | Div Yield: {dividend_yield:.2%} | Days: {days}")
-
         # Synthetic costs
         spread = self.estimate_spread_from_volatility(volatility)
         synthetic_rate = sofr_rate + spread
-        print("Syntethic", end=' ')
         financing_data = self.calculate_financing_cost(notional, days, spread, sofr_rate)
 
         cash_yield = dividend_yield * (1 - tax_rate)
@@ -287,26 +228,18 @@ class SyntheticPricer:
         total_synthetic_cost = financing_data['total_cost'] - period_advantage + transaction_cost_amount
 
         # Cash costs
-        print("Long Cash", end=' ')
         opportunity_cost = self.calculate_financing_cost(notional, days, 0, sofr_rate)['total_cost']
-        print("Short Cash", end=' ')
         borrow_cost = self.calculate_financing_cost(notional, days, 0, cash_borrow_rate)['total_cost']
         total_cash_long = opportunity_cost + transaction_cost_amount
         total_cash_short = borrow_cost + transaction_cost_amount
 
-        # Comparison
-        savings_vs_long = total_cash_long - total_synthetic_cost
-        savings_vs_short = total_cash_short - total_synthetic_cost
-
-        costs = [('Synthetic', total_synthetic_cost),
-                 ('Cash Long', total_cash_long),
-                 ('Cash Short', total_cash_short)]
+        # Determine cheapest
+        costs = [
+            ('SYNTHETIC', total_synthetic_cost),
+            ('CASH_LONG', total_cash_long),
+            ('CASH_SHORT', total_cash_short)
+        ]
         cheapest = min(costs, key=lambda x: x[1])
-
-        print(f"\nCost Comparison:")
-        for name, cost in costs:
-            print(f"  {name}: ${cost:,.0f}")
-        print(f"\nCheapest: {cheapest[0]} (${cheapest[1]:,.0f})")
 
         return {
             'ticker': ticker,
@@ -316,21 +249,13 @@ class SyntheticPricer:
             'dividend_yield': dividend_yield,
             'estimated_spread': spread,
             'synthetic_rate': synthetic_rate,
-            'synthetic_cost': {
-                'financing_cost': financing_data['total_cost'],
-                'dividend_advantage': period_advantage,
-                'transaction_cost': transaction_cost_amount,
-                'total': total_synthetic_cost
-            },
-            'cash_cost': {
-                'long': {'total': total_cash_long},
-                'short': {'total': total_cash_short}
-            },
-            'comparison': {
-                'synthetic_vs_long': savings_vs_long,
-                'synthetic_vs_short': savings_vs_short,
-                'recommendation': cheapest[0].upper().replace(' ', '_')
-            }
+            'synthetic_cost': total_synthetic_cost,
+            'cash_long_cost': total_cash_long,
+            'cash_short_cost': total_cash_short,
+            'savings_vs_long': total_cash_long - total_synthetic_cost,
+            'savings_vs_short': total_cash_short - total_synthetic_cost,
+            'recommendation': cheapest[0],
+            'basis': synthetic_rate - cash_borrow_rate
         }
 
     def batch_cost_analysis(self,
@@ -342,10 +267,11 @@ class SyntheticPricer:
         """Run cost analysis for multiple tickers"""
         results = []
 
+        self._log(f"Analyzing {len(tickers)} tickers...")
+
         for ticker in tickers:
             try:
                 if ticker in prices.columns and ticker in volatilities.columns:
-                    print(f"\n{ticker}: ", end="")
                     price = prices[ticker].iloc[-1]
                     volatility = volatilities[ticker].iloc[-1]
 
@@ -361,7 +287,6 @@ class SyntheticPricer:
                         **kwargs
                     )
                     results.append(result)
-                    print(f" Done (${result['synthetic_cost']['total']:.0f})")
 
             except Exception as e:
                 print(f"Error with {ticker}: {str(e)[:50]}")
@@ -370,19 +295,8 @@ class SyntheticPricer:
             return pd.DataFrame()
 
         results_df = pd.DataFrame(results)
-
-        # Summary statistics
-        if 'comparison' in results_df.columns:
-            recs = results_df['comparison'].apply(lambda x: x['recommendation'])
-            print(f"\nRecommendations:")
-            for rec, count in recs.value_counts().items():
-                print(f"  {rec}: {count} tickers")
-
-        if 'synthetic_cost' in results_df.columns:
-            results_df['synthetic_total'] = results_df['synthetic_cost'].apply(lambda x: x['total'])
-            print(f"\nMost Expensive Synthetic:")
-            for _, row in results_df.nlargest(3, 'synthetic_total').iterrows():
-                print(f"  {row['ticker']}: ${row['synthetic_total']:.0f}")
+        recs = results_df['recommendation'].value_counts()
+        print(f"Recommendations: {recs.to_dict()}")
 
         return results_df
 
@@ -390,19 +304,7 @@ class SyntheticPricer:
                         synthetic_rate: float,
                         cash_rate: float) -> float:
         """Calculate basis between synthetic and cash rates"""
-        basis = synthetic_rate - cash_rate
-        bps = basis * 10000
-
-        print(f"\nBasis Calculation:")
-        print(f"  Synthetic: {synthetic_rate:.2%} | Cash: {cash_rate:.2%}")
-        print(f"  Basis: {basis:.2%} ({bps:.0f} bps)")
-
-        if basis > 0:
-            print(f"  → Synthetic is {basis:.2%} more expensive")
-        elif basis < 0:
-            print(f"  → Synthetic is {-basis:.2%} cheaper")
-
-        return basis
+        return synthetic_rate - cash_rate
 
     def calculate_historical_basis(self,
                                    tickers: List[str],
@@ -412,18 +314,13 @@ class SyntheticPricer:
                                    sofr_rates: Optional[pd.Series] = None,
                                    cash_rates: Optional[pd.Series] = None,
                                    days: int = 90,
-                                   notional: float = 100000,
                                    tax_rate: float = 0.30) -> pd.DataFrame:
         """Calculate historical basis over time"""
-        print(f"Historical Basis for {len(tickers)} tickers")
-        print(f"Date Range: {prices.index[0].date()} to {prices.index[-1].date()}")
-
         basis_data = []
         for ticker in tickers:
             if ticker not in prices.columns or ticker not in volatilities.columns:
                 continue
 
-            print(f".", end="")  # Progress indicator
             ticker_prices = prices[ticker].dropna()
             ticker_vols = volatilities[ticker].dropna()
             common_dates = ticker_prices.index.intersection(ticker_vols.index)
@@ -469,7 +366,8 @@ class SyntheticPricer:
                         'effective_synthetic_rate': effective_synthetic_rate,
                         'cash_rate': cash,
                         'basis': basis,
-                        'dividend_yield': div_yield
+                        'dividend_yield': div_yield,
+                        'spread': spread
                     })
                 except:
                     continue
@@ -479,17 +377,7 @@ class SyntheticPricer:
 
         basis_df = pd.DataFrame(basis_data)
         pivot_basis = basis_df.pivot(index='date', columns='ticker', values='basis')
-
-        print(f"\n\nBasis Statistics:")
-        for ticker in pivot_basis.columns:
-            basis_series = pivot_basis[ticker].dropna()
-            if len(basis_series) > 0:
-                print(f"  {ticker}: Mean: {basis_series.mean():.2%} | "
-                      f"Std: {basis_series.std():.2%} | Current: {basis_series.iloc[-1]:.2%}")
-
-        basis_file = "data/processed/historical_basis.csv"
-        basis_df.to_csv(basis_file, index=False)
-        print(f"\nSaved to: {basis_file}")
+        print(f"Calculated basis for {len(pivot_basis.columns)} tickers, {len(pivot_basis)} dates")
 
         return basis_df
 
@@ -499,9 +387,6 @@ class SyntheticPricer:
                                exit_threshold: float = 0.0025,
                                lookback_days: int = 252) -> pd.DataFrame:
         """Generate trading signals based on basis levels"""
-        print(f"\nBasis Signals:")
-        print(f"  Entry: ±{entry_threshold:.2%} | Exit: ±{exit_threshold:.2%}")
-
         signals = pd.DataFrame(index=basis_series.index)
         signals['basis'] = basis_series
         signals['mean'] = basis_series.rolling(lookback_days, min_periods=20).mean()
@@ -509,104 +394,195 @@ class SyntheticPricer:
         signals['zscore'] = (basis_series - signals['mean']) / signals['std']
 
         signals['signal'] = 0
-        signals.loc[basis_series < -entry_threshold, 'signal'] = 1  # Long basis
-        signals.loc[basis_series > entry_threshold, 'signal'] = -1  # Short basis
+        signals.loc[basis_series < -entry_threshold, 'signal'] = 1  # Long basis (buy synthetic)
+        signals.loc[basis_series > entry_threshold, 'signal'] = -1  # Short basis (sell synthetic)
         signals.loc[basis_series.abs() < exit_threshold, 'signal'] = 0
         signals['position'] = signals['signal'].replace(0, np.nan).ffill().fillna(0)
 
-        print(f"\nSignal Summary:")
-        for pos, label in [(1, 'Long'), (-1, 'Short'), (0, 'Neutral')]:
-            count = (signals['position'] == pos).sum()
-            print(f"  {label}: {count} days")
-
-        if len(signals) > 0:
-            current = signals.iloc[-1]
-            if current['position'] == 1:
-                print(f"  Current: LONG BASIS (Synthetic is cheap by {-current['basis']:.2%})")
-            elif current['position'] == -1:
-                print(f"  Current: SHORT BASIS (Synthetic is expensive by {current['basis']:.2%})")
-            else:
-                print(f"  Current: NEUTRAL")
-
+        print(f"Generated signals: {(signals['position'] != 0).sum()} active days")
         return signals
 
-    def analyze_basis_regimes(self,
-                              basis_df: pd.DataFrame,
-                              ticker: str) -> Dict[str, Any]:
-        """Analyze different basis regimes for a specific ticker"""
-        print(f"\nBasis Regimes: {ticker}")
+    def run_full_pricing_analysis(self,
+                                  data: Dict[str, Any],
+                                  days: int = 90,
+                                  notional: float = 100000,
+                                  tax_rate: float = 0.30,
+                                  transaction_cost: float = 0.001,
+                                  include_historical_basis: bool = True,
+                                  generate_signals: bool = True,
+                                  entry_threshold: float = 0.01,
+                                  exit_threshold: float = 0.0025) -> Dict[str, Any]:
+        """
+        Run complete synthetic pricing analysis
+        
+        Takes output from DataPipeline and produces comprehensive pricing comparison
+        
+        Parameters:
+        -----------
+        data : Dict from DataPipeline.run_full_pipeline()
+        days : Holding period for cost calculation (default: 90)
+        notional : Position size in dollars (default: 100,000)
+        tax_rate : Tax rate on dividends (default: 30%)
+        transaction_cost : Transaction cost as % of notional (default: 0.1%)
+        include_historical_basis : Calculate basis over time (default: True)
+        generate_signals : Generate trading signals (default: True)
+        entry_threshold : Basis threshold for signal entry (default: 1%)
+        exit_threshold : Basis threshold for signal exit (default: 0.25%)
+        
+        Returns:
+        --------
+        Dictionary containing:
+            - current_analysis: DataFrame with current cost comparison for all tickers
+            - spread_stats: DataFrame with spread statistics by ticker
+            - dividend_impact: DataFrame with dividend advantage analysis
+            - historical_basis: DataFrame with basis over time (if requested)
+            - signals: Dict of DataFrames with trading signals per ticker (if requested)
+            - summary: Dict with aggregate statistics
+        """
 
-        ticker_data = basis_df[basis_df['ticker'] == ticker].copy()
-        if ticker_data.empty:
-            return {}
+        print("\nRunning full pricing analysis...")
+        print(f"Parameters: {days} days, ${notional:,.0f} notional, {tax_rate:.0%} tax rate\n")
 
-        basis_values = ticker_data['basis'].dropna()
-        low_pct = basis_values.quantile(0.25)
-        high_pct = basis_values.quantile(0.75)
+        # Extract data components
+        prices = data['prices']
+        returns = data['returns']
+        volatilities = data['volatility']
+        dividends = data['dividends']
 
-        regimes = []
-        current_regime = None
-        regime_start = None
+        tickers = list(volatilities.columns)
+        print(f"Analyzing {len(tickers)} tickers")
 
-        for i, (date, row) in enumerate(ticker_data.iterrows()):
-            basis = row['basis']
-            if basis < low_pct:
-                regime = 'CHEAP'
-            elif basis > high_pct:
-                regime = 'EXPENSIVE'
-            else:
-                regime = 'NORMAL'
+        # Current cost analysis
+        print("Calculating current costs...")
+        current_analysis = self.batch_cost_analysis(
+            tickers=tickers,
+            prices=prices,
+            volatilities=volatilities,
+            dividends=dividends,
+            days=days,
+            notional=notional,
+            tax_rate=tax_rate,
+            transaction_cost=transaction_cost
+        )
 
-            if regime != current_regime:
-                if current_regime is not None:
-                    regimes.append({
-                        'regime': current_regime,
-                        'start': regime_start,
-                        'end': ticker_data.iloc[i - 1]['date'],
-                        'duration': (ticker_data.iloc[i - 1]['date'] - regime_start).days,
-                        'avg_basis': ticker_data.loc[regime_start:ticker_data.iloc[i - 1]['date'], 'basis'].mean()
-                    })
-                current_regime = regime
-                regime_start = date
+        # Spread statistics
+        print("Calculating spread statistics...")
+        spread_stats = self.calculate_spread_statistics(volatilities)
 
-        # Add last regime
-        if current_regime is not None:
-            regimes.append({
-                'regime': current_regime,
-                'start': regime_start,
-                'end': ticker_data.iloc[-1]['date'],
-                'duration': (ticker_data.iloc[-1]['date'] - regime_start).days,
-                'avg_basis': ticker_data.loc[regime_start:, 'basis'].mean()
+        # Dividend impact
+        print("Analyzing dividend impact...")
+        dividend_impact = pd.DataFrame()
+        if not dividends.empty:
+            dividend_impact = self.calculate_dividend_impact(
+                prices=prices,
+                dividends=dividends,
+                tax_rate=tax_rate,
+                position_days=days
+            )
+
+        # Historical basis
+        historical_basis = pd.DataFrame()
+        if include_historical_basis:
+            print("Calculating historical basis...")
+            historical_basis = self.calculate_historical_basis(
+                tickers=tickers,
+                prices=prices,
+                volatilities=volatilities,
+                dividends=dividends if not dividends.empty else None,
+                sofr_rates=None,
+                cash_rates=None,
+                days=days,
+                tax_rate=tax_rate
+            )
+
+            # Save to file
+            if not historical_basis.empty:
+                cache_file = f"{config.PATH_CONFIG['processed_data_path']}/historical_basis.csv"
+                historical_basis.to_csv(cache_file, index=False)
+                print(f"Saved historical basis to {cache_file}")
+
+        # Generate signals
+        signals_dict = {}
+        if generate_signals and not historical_basis.empty:
+            print("Generating trading signals...")
+            for ticker in tickers:
+                ticker_basis = historical_basis[historical_basis['ticker'] == ticker].set_index('date')['basis']
+                if len(ticker_basis) > 50:  # Minimum data requirement
+                    signals = self.generate_basis_signals(
+                        basis_series=ticker_basis,
+                        entry_threshold=entry_threshold,
+                        exit_threshold=exit_threshold
+                    )
+                    signals_dict[ticker] = signals
+
+        # Create summary statistics
+        summary = {
+            'num_tickers': len(tickers),
+            'analysis_date': pd.Timestamp.now().strftime('%Y-%m-%d'),
+            'holding_period_days': days,
+            'notional': notional,
+            'tax_rate': tax_rate,
+        }
+
+        if not current_analysis.empty:
+            summary.update({
+                'avg_synthetic_cost': current_analysis['synthetic_cost'].mean(),
+                'avg_cash_long_cost': current_analysis['cash_long_cost'].mean(),
+                'avg_basis': current_analysis['basis'].mean(),
+                'recommendations': current_analysis['recommendation'].value_counts().to_dict(),
+                'total_savings_vs_long': current_analysis['savings_vs_long'].sum(),
             })
 
-        # Statistics
-        regime_stats = {}
-        for regime_type in ['CHEAP', 'EXPENSIVE', 'NORMAL']:
-            type_regimes = [r for r in regimes if r['regime'] == regime_type]
-            if type_regimes:
-                total_days = sum(r['duration'] for r in type_regimes)
-                avg_basis = sum(r['avg_basis'] * r['duration'] for r in type_regimes) / total_days
+        if not spread_stats.empty:
+            summary['avg_spread'] = spread_stats['mean_spread'].mean()
+            summary['spread_range'] = {
+                'min': spread_stats['min_spread'].min(),
+                'max': spread_stats['max_spread'].max()
+            }
 
-                regime_stats[regime_type] = {
-                    'count': len(type_regimes),
-                    'total_days': total_days,
-                    'avg_duration': total_days / len(type_regimes),
-                    'avg_basis': avg_basis
-                }
+        if not dividend_impact.empty:
+            summary['total_dividend_advantage'] = dividend_impact['annual_advantage'].sum()
 
-        print(f"\nRegime Analysis:")
-        for regime, stats in regime_stats.items():
-            print(f"  {regime}: {stats['count']} regimes, Avg {stats['avg_duration']:.0f} days, "
-                  f"Basis: {stats['avg_basis']:.2%}")
-
-        current_basis = ticker_data['basis'].iloc[-1]
-        current_regime = 'CHEAP' if current_basis < low_pct else 'EXPENSIVE' if current_basis > high_pct else 'NORMAL'
-        print(f"\nCurrent: {current_regime} ({current_basis:.2%})")
-
-        return {
-            'regime_data': regimes,
-            'regime_stats': regime_stats,
-            'current_regime': current_regime,
-            'current_basis': current_basis,
-            'percentiles': {'25th': low_pct, '75th': high_pct}
+        # Package results
+        result = {
+            'current_analysis': current_analysis,
+            'spread_stats': spread_stats,
+            'dividend_impact': dividend_impact,
+            'historical_basis': historical_basis,
+            'signals': signals_dict,
+            'summary': summary
         }
+
+        # Print summary
+        print("PRICING ANALYSIS COMPLETE")
+        print(f"Tickers analyzed: {summary['num_tickers']}")
+        
+        if not current_analysis.empty:
+            print(f"\nCurrent Analysis:")
+            print(f"  Avg synthetic cost: ${summary['avg_synthetic_cost']:,.0f}")
+            print(f"  Avg cash long cost: ${summary['avg_cash_long_cost']:,.0f}")
+            print(f"  Avg basis: {summary['avg_basis']:.2%}")
+            print(f"  Recommendations: {summary['recommendations']}")
+            print(f"  Total potential savings: ${summary['total_savings_vs_long']:,.0f}")
+
+        if not spread_stats.empty:
+            print(f"\nSpread Statistics:")
+            print(f"  Average spread: {summary['avg_spread']:.2%}")
+            print(f"  Spread range: {summary['spread_range']['min']:.2%} - {summary['spread_range']['max']:.2%}")
+
+        if not dividend_impact.empty:
+            print(f"\nDividend Impact:")
+            print(f"  Total annual advantage: ${summary['total_dividend_advantage']:,.0f}")
+
+        if not historical_basis.empty:
+            print(f"\nHistorical Basis:")
+            print(f"  Data points: {len(historical_basis)}")
+            print(f"  Date range: {historical_basis['date'].min().date()} to {historical_basis['date'].max().date()}")
+
+        if signals_dict:
+            print(f"\nTrading Signals:")
+            print(f"  Signals generated for {len(signals_dict)} tickers")
+            total_active = sum((sig['position'] != 0).sum() for sig in signals_dict.values())
+            print(f"  Total active signal days: {total_active}")
+
+        return result

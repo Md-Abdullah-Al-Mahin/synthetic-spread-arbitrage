@@ -29,13 +29,20 @@ class DataPipeline:
     def fetch_market_data(self,
                           tickers: Optional[List[str]] = None,
                           start_date: Optional[str] = None,
-                          end_date: Optional[str] = None) -> pd.DataFrame:
+                          end_date: Optional[str] = None,
+                          force_download: bool = False) -> pd.DataFrame:
         """Download historical price data for given tickers"""
         tickers = tickers or self.tickers
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
 
-        cache_file = f"data/raw/market_data_{start_date}_{end_date}.csv"
+        cache_file = f"{config.PATH_CONFIG['raw_data_path']}/market_data_{start_date}_{end_date}.csv"
+
+        # Check cache first
+        if not force_download and os.path.exists(cache_file):
+            print(f"Loading market data from cache")
+            self.prices = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            return self.prices
 
         print(f"Downloading market data for {len(tickers)} tickers...")
 
@@ -49,29 +56,41 @@ class DataPipeline:
                     price_data[ticker] = hist['Close']
                     print(f"  {ticker}: {len(hist)} days")
                 else:
-                    print(f"  No data for {ticker}")
+                    print(f"  {ticker}: No data")
 
             except Exception as e:
-                print(f"  Error downloading {ticker}: {e}")
+                print(f"  {ticker}: Error - {e}")
 
         if not price_data:
             raise ValueError("No data could be downloaded for any ticker")
 
         self.prices = pd.DataFrame(price_data)
         self.prices.to_csv(cache_file)
-        print(f"Data saved to: {cache_file}")
+        print(f"Saved to {cache_file}")
 
         return self.prices
 
-    def calculate_returns(self, prices: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    def calculate_returns(self, 
+                         prices: Optional[pd.DataFrame] = None,
+                         force_calculate: bool = False) -> pd.DataFrame:
         """Calculate daily percentage returns"""
-        if prices is None and self.prices is None:
+        prices = prices if prices is not None else self.prices
+        
+        if prices is None:
             raise ValueError("No price data available. Run fetch_market_data() first.")
 
-        prices = prices if not prices.empty else self.prices
+        # Generate cache filename based on price data date range
+        start_date = prices.index[0].date()
+        end_date = prices.index[-1].date()
+        returns_file = f"{config.PATH_CONFIG['processed_data_path']}/daily_returns_{start_date}_{end_date}.csv"
+
+        # Check cache first
+        if not force_calculate and os.path.exists(returns_file):
+            print(f"Loading returns from cache")
+            self.returns = pd.read_csv(returns_file, index_col=0, parse_dates=True)
+            return self.returns
 
         print(f"Calculating returns for {len(prices.columns)} tickers")
-        print(f"Date range: {prices.index[0].date()} to {prices.index[-1].date()}")
 
         # Calculate percentage returns
         self.returns = prices.pct_change().dropna()
@@ -80,54 +99,64 @@ class DataPipeline:
         self.returns = self.returns.replace([np.inf, -np.inf], np.nan).fillna(0)
 
         # Save to cache
-        returns_file = f"data/processed/daily_returns_{prices.index[0].date()}_{prices.index[-1].date()}.csv"
         self.returns.to_csv(returns_file)
-        print(f"Returns data saved to: {returns_file}")
+        print(f"Saved to {returns_file}")
 
         return self.returns
 
     def calculate_realized_volatility(self,
                                       returns: Optional[pd.DataFrame] = None,
-                                      window: int = 30) -> pd.DataFrame:
+                                      window: int = 30,
+                                      force_calculate: bool = False) -> pd.DataFrame:
         """Calculate rolling volatility (annualized)"""
-        if returns is None and self.returns is None:
+        returns = returns if returns is not None else self.returns
+        
+        if returns is None:
             raise ValueError("No returns data available. Run calculate_returns() first.")
 
-        returns = returns if not returns.empty else self.returns
+        # Generate cache filename based on returns data date range
+        start_date = returns.index[0].date()
+        end_date = returns.index[-1].date()
+        vol_file = f"{config.PATH_CONFIG['processed_data_path']}/volatility_{window}day_{start_date}_{end_date}.csv"
 
-        print(f"Calculating {window}-day rolling volatility")
+        # Check cache first
+        if not force_calculate and os.path.exists(vol_file):
+            print(f"Loading volatility from cache")
+            self.volatility = pd.read_csv(vol_file, index_col=0, parse_dates=True)
+            return self.volatility
+
+        print(f"Calculating {window}-day rolling volatility...")
 
         # Calculate rolling standard deviation and annualize
         daily_vol = returns.rolling(window=window).std()
         self.volatility = daily_vol * np.sqrt(252)
         self.volatility = self.volatility.dropna()
 
-        print(f"Volatility calculated: {self.volatility.index[0].date()} to {self.volatility.index[-1].date()}")
-
         # Save to cache
-        vol_file = f"data/processed/volatility_{window}day.csv"
         self.volatility.to_csv(vol_file)
-        print(f"Volatility data saved to: {vol_file}")
+        print(f"Saved to {vol_file}")
 
         return self.volatility
 
     def get_dividend_data(self,
                           tickers: Optional[List[str]] = None,
                           start_date: Optional[str] = None,
-                          end_date: Optional[str] = None) -> pd.DataFrame:
+                          end_date: Optional[str] = None,
+                          force_download: bool = False) -> pd.DataFrame:
         """Get dividend payment history"""
         tickers = tickers or self.tickers
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
 
-        cache_file = f"data/processed/dividends_{start_date}_{end_date}.csv"
+        cache_file = f"{config.PATH_CONFIG['processed_data_path']}/dividends_{start_date}_{end_date}.csv"
 
-        if os.path.exists(cache_file):
+        # Check cache first
+        if not force_download and os.path.exists(cache_file):
             print("Loading dividend data from cache")
             self.dividends = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             return self.dividends
 
-        print(f"Fetching dividend data for {len(tickers)} tickers")
+        print(f"Fetching dividend data for {len(tickers)} tickers...")
         dividend_data = []
 
         for ticker in tickers:
@@ -135,7 +164,6 @@ class DataPipeline:
                 dividends = yf.Ticker(ticker).dividends
 
                 if dividends.empty:
-                    print(f"  {ticker}: No dividend history")
                     continue
 
                 # Filter by date range
@@ -154,7 +182,7 @@ class DataPipeline:
                     print(f"  {ticker}: {len(dividends)} payments")
 
             except Exception as e:
-                print(f"  Error fetching {ticker}: {e}")
+                print(f"  {ticker}: Error - {e}")
 
         if dividend_data:
             combined = pd.concat(dividend_data)
@@ -167,7 +195,7 @@ class DataPipeline:
             ).sort_index()
 
             self.dividends.to_csv(cache_file)
-            print(f"Dividend data saved")
+            print(f"Saved dividend data")
         else:
             print("No dividend data found")
             self.dividends = pd.DataFrame()
@@ -179,15 +207,13 @@ class DataPipeline:
                                  dividends: Optional[pd.DataFrame] = None,
                                  period: str = 'annual') -> pd.DataFrame:
         """Calculate dividend yield for specified period"""
-        if prices is None:
-            prices = self.prices
-        if dividends is None:
-            dividends = self.dividends
+        prices = prices if prices is not None else self.prices
+        dividends = dividends if dividends is not None else self.dividends
 
         if prices is None or dividends is None:
             raise ValueError("Price and dividend data required")
 
-        print(f"Calculating {period} dividend yield")
+        print(f"Calculating {period} dividend yield...")
 
         # Map period to frequency and multiplier
         freq_map = {
@@ -209,7 +235,7 @@ class DataPipeline:
         common_dates = resampled_dividends.index.intersection(period_prices.index)
 
         if len(common_dates) == 0:
-            print("No overlapping dates for dividend yield calculation")
+            print("No overlapping dates")
             return pd.DataFrame()
 
         resampled_dividends = resampled_dividends.loc[common_dates]
@@ -225,14 +251,13 @@ class DataPipeline:
                        start_date: Optional[str] = None,
                        end_date: Optional[str] = None,
                        force_download: bool = False) -> pd.Series:
-        """
-        Download VIX (Volatility Index) data
-        """
+        """Download VIX (Volatility Index) data"""
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
 
-        cache_file = f"data/raw/vix_{start_date}_{end_date}.csv"
+        cache_file = f"{config.PATH_CONFIG['raw_data_path']}/vix_{start_date}_{end_date}.csv"
 
+        # Check cache first
         if not force_download and os.path.exists(cache_file):
             print("Loading VIX data from cache")
             self.vix = pd.read_csv(cache_file, index_col=0, parse_dates=True).squeeze()
@@ -246,17 +271,16 @@ class DataPipeline:
 
             if not vix_hist.empty:
                 self.vix = vix_hist['Close']
-                self.vix.index = self.vix.index.tz_localize(None)  # Remove timezone
+                self.vix.index = self.vix.index.tz_localize(None)
 
-                # Save to cache
                 self.vix.to_csv(cache_file, header=True)
-                print(f"VIX data saved: {len(self.vix)} days")
+                print(f"Saved VIX data: {len(self.vix)} days")
             else:
-                print("Warning: No VIX data downloaded")
+                print("No VIX data downloaded")
                 self.vix = pd.Series(dtype=float)
 
         except Exception as e:
-            print(f"Error downloading VIX data: {e}")
+            print(f"Error downloading VIX: {e}")
             self.vix = pd.Series(dtype=float)
 
         return self.vix
@@ -266,22 +290,20 @@ class DataPipeline:
                              start_date: Optional[str] = None,
                              end_date: Optional[str] = None,
                              force_download: bool = False) -> pd.DataFrame:
-        """
-        Estimate liquidity using bid-ask spread approximation
-        For simplicity, we'll use volume/price ratio as a proxy
-        """
+        """Estimate liquidity using volume-based proxy"""
         tickers = tickers or self.tickers
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
 
-        cache_file = f"data/raw/liquidity_{start_date}_{end_date}.csv"
+        cache_file = f"{config.PATH_CONFIG['raw_data_path']}/liquidity_{start_date}_{end_date}.csv"
 
+        # Check cache first
         if not force_download and os.path.exists(cache_file):
             print("Loading liquidity data from cache")
             self.liquidity = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             return self.liquidity
 
-        print(f"Fetching liquidity data for {len(tickers)} tickers")
+        print(f"Fetching liquidity data for {len(tickers)} tickers...")
 
         liquidity_data = {}
 
@@ -291,121 +313,147 @@ class DataPipeline:
                 hist = stock.history(start=start_date, end=end_date, auto_adjust=True)
 
                 if not hist.empty and 'Volume' in hist.columns and 'Close' in hist.columns:
-                    # Use volume/dollar volume ratio as liquidity proxy
-                    # Higher ratio = more liquid
                     dollar_volume = hist['Volume'] * hist['Close']
                     avg_dollar_volume = dollar_volume.rolling(20).mean()
-
-                    # Normalize and invert (so higher = less liquid, like bid-ask spread)
-                    # We use log for better distribution
                     liquidity_metric = 1 / (np.log1p(avg_dollar_volume) + 1)
                     liquidity_data[ticker] = liquidity_metric
-
                     print(f"  {ticker}: {len(hist)} days")
-                else:
-                    print(f"  {ticker}: Insufficient data")
 
             except Exception as e:
-                print(f"  Error fetching {ticker}: {e}")
-                continue
+                print(f"  {ticker}: Error - {e}")
 
         if liquidity_data:
             self.liquidity = pd.DataFrame(liquidity_data).dropna()
             self.liquidity.index = self.liquidity.index.tz_localize(None)
 
-            # Save to cache
             self.liquidity.to_csv(cache_file)
-            print(f"Liquidity data saved: {self.liquidity.shape}")
+            print(f"Saved liquidity data")
         else:
             print("No liquidity data found")
             self.liquidity = pd.DataFrame()
 
         return self.liquidity
 
-    def calculate_rolling_bid_ask_spread(self,
-                                         ticker: str,
-                                         window: int = 20) -> pd.Series:
+    def run_full_pipeline(self,
+                          tickers: Optional[List[str]] = None,
+                          start_date: Optional[str] = None,
+                          end_date: Optional[str] = None,
+                          volatility_window: int = 30,
+                          include_vix: bool = True,
+                          include_liquidity: bool = True,
+                          calculate_div_yield: bool = True,
+                          force_download: bool = False) -> Dict[str, Any]:
         """
-        Calculate rolling bid-ask spread percentage
-        This is a more direct measure of liquidity
-
-        Note: Requires high-frequency data, so we'll use a simplified version
+        Run complete data pipeline: fetch and process all market data
+        
+        Parameters:
+        -----------
+        tickers : List of stock symbols
+        start_date : Start date for historical data
+        end_date : End date for historical data
+        volatility_window : Rolling window for volatility calculation (default: 30)
+        include_vix : Whether to fetch VIX data (default: True)
+        include_liquidity : Whether to fetch liquidity metrics (default: True)
+        calculate_div_yield : Whether to calculate dividend yields (default: True)
+        force_download : Force fresh download, ignore cache (default: False)
+        
+        Returns:
+        --------
+        Dictionary containing:
+            - prices: DataFrame with daily closing prices
+            - returns: DataFrame with daily percentage returns
+            - volatility: DataFrame with annualized rolling volatility
+            - dividends: DataFrame with dividend payment history
+            - dividend_yield: DataFrame with annual dividend yields
+            - vix: Series with VIX index values
+            - liquidity: DataFrame with liquidity metrics
+            - metadata: Dict with summary statistics
         """
-        try:
-            stock = yf.Ticker(ticker)
-
-            # Get recent market data
-            hist = stock.history(period='1mo', interval='1d')
-
-            if 'High' in hist.columns and 'Low' in hist.columns:
-                # Simplified bid-ask spread: (High - Low) / ((High + Low) / 2)
-                spread_pct = (hist['High'] - hist['Low']) / ((hist['High'] + hist['Low']) / 2)
-                rolling_spread = spread_pct.rolling(window).mean()
-                return rolling_spread.dropna()
-
-        except Exception as e:
-            print(f"Error calculating bid-ask spread for {ticker}: {e}")
-
-        return pd.Series(dtype=float)
-
-    def get_market_data_complete(self,
-                                 tickers: Optional[List[str]] = None,
-                                 start_date: Optional[str] = None,
-                                 end_date: Optional[str] = None,
-                                 include_vix: bool = True,
-                                 include_liquidity: bool = True,
-                                 force_download: bool = False) -> Dict[str, Any]:
-        """
-        Get complete market data including VIX and liquidity
-        """
+        
         tickers = tickers or self.tickers
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
-
-        print(f"Fetching complete market data for {len(tickers)} tickers")
+        
+        print(f"\nRunning full data pipeline...")
+        print(f"Tickers: {tickers}")
         print(f"Date range: {start_date} to {end_date}")
-
+        print(f"Force download: {force_download}\n")
+        
         # Fetch price data
-        prices = self.fetch_market_data(tickers, start_date, end_date)
-
-        # Calculate returns and volatility
-        returns = self.calculate_returns(prices)
-        volatility = self.calculate_realized_volatility(returns, window=30)
-
+        prices = self.fetch_market_data(tickers, start_date, end_date, force_download)
+        
+        # Calculate returns
+        returns = self.calculate_returns(prices, force_calculate=force_download)
+        
+        # Calculate volatility
+        volatility = self.calculate_realized_volatility(returns, window=volatility_window, force_calculate=force_download)
+        
         # Fetch dividends
-        dividends = self.get_dividend_data(tickers, start_date, end_date)
-
-        # Fetch VIX if requested
+        dividends = self.get_dividend_data(tickers, start_date, end_date, force_download)
+        
+        # Calculate dividend yield (optional)
+        dividend_yield = None
+        if calculate_div_yield and not dividends.empty:
+            dividend_yield = self.calculate_dividend_yield(prices, dividends, period='annual')
+        
+        # Fetch VIX (optional)
         vix_data = None
         if include_vix:
             vix_data = self.fetch_vix_data(start_date, end_date, force_download)
-
-        # Fetch liquidity if requested
+        
+        # Fetch liquidity (optional)
         liquidity_data = None
         if include_liquidity:
             liquidity_data = self.fetch_liquidity_data(tickers, start_date, end_date, force_download)
-
+        
         # Align all data to common dates
         common_dates = volatility.index
-        if vix_data is not None:
-            vix_data = vix_data.reindex(common_dates).fillna(method='ffill')
-        if liquidity_data is not None:
-            liquidity_data = liquidity_data.reindex(common_dates).fillna(method='ffill')
-
+        
+        if vix_data is not None and not vix_data.empty:
+            vix_data = vix_data.reindex(common_dates).ffill()
+        
+        if liquidity_data is not None and not liquidity_data.empty:
+            liquidity_data = liquidity_data.reindex(common_dates).ffill()
+        
+        # Create metadata summary
+        metadata = {
+            'tickers': tickers,
+            'start_date': start_date,
+            'end_date': end_date,
+            'trading_days': len(common_dates),
+            'volatility_window': volatility_window,
+            'num_tickers': len(tickers),
+            'avg_volatility': volatility.mean().to_dict(),
+            'avg_returns': returns.mean().to_dict(),
+            'total_dividends': dividends.sum().to_dict() if not dividends.empty else {},
+        }
+        
+        # Package results
         result = {
             'prices': prices,
             'returns': returns,
             'volatility': volatility,
             'dividends': dividends,
+            'dividend_yield': dividend_yield,
             'vix': vix_data,
             'liquidity': liquidity_data,
-            'common_dates': common_dates
+            'common_dates': common_dates,
+            'metadata': metadata
         }
-
-        print(f"\nData Collection Complete:")
+        
+        # Print summary
+        print("\nPipeline complete:")
         print(f"  Prices: {prices.shape}")
+        print(f"  Returns: {returns.shape}")
         print(f"  Volatility: {volatility.shape}")
-        print(f"  VIX: {len(vix_data) if vix_data is not None else 0} days")
-        print(f"  Liquidity: {liquidity_data.shape if liquidity_data is not None else 'None'}")
-
+        if not dividends.empty:
+            print(f"  Dividends: {dividends.shape}")
+        if dividend_yield is not None:
+            print(f"  Dividend Yield: {dividend_yield.shape}")
+        if vix_data is not None:
+            print(f"  VIX: {len(vix_data)} days")
+        if liquidity_data is not None:
+            print(f"  Liquidity: {liquidity_data.shape}")
+        print()
+        
         return result

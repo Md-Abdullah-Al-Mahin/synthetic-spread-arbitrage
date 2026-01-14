@@ -1,157 +1,198 @@
-#!/usr/bin/env python3
-"""
-Synthetic Spread Arbitrage Optimizer - Unified Interface
-"""
-
+import pandas as pd
 import sys
 import os
-import argparse
 from datetime import datetime
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.data_pipeline import DataPipeline
-from src.synthetic_pricer import SyntheticPricer
-from src.statistical_models import StatisticalModels
-
-
-def parse_args():
-    """Simple command line arguments"""
-    parser = argparse.ArgumentParser(description="Synthetic Spread Optimizer")
-    parser.add_argument('--tickers', nargs='+', default=['AAPL', 'MSFT'],
-                        help='Stock tickers (default: AAPL MSFT)')
-    parser.add_argument('--start', default='2024-01-01', help='Start date')
-    parser.add_argument('--end', default='2024-06-01', help='End date')
-    parser.add_argument('--stats', action='store_true', help='Run statistical analyses')
-    parser.add_argument('--quick', action='store_true', help='Quick test mode')
-    return parser.parse_args()
+from data_pipeline import DataPipeline
+from synthetic_pricer import SyntheticPricer
+from statistical_models import StatisticalModels
+from risk_analytics import RiskAnalytics
+import config
 
 
-def save_all_results(data, synthetic_results, stats_results, timestamp):
-    """Save all results to files"""
-    os.makedirs('data/results', exist_ok=True)
-
-    # Save synthetic results
-    if synthetic_results and 'batch_results' in synthetic_results:
-        filename = f'data/results/synthetic_{timestamp}.csv'
-        synthetic_results['batch_results'].to_csv(filename, index=False)
-        print(f"  ✓ Synthetic results: {filename}")
-
-    # Save statistical results
-    if stats_results:
-        # Save Z-scores
-        if 'zscores' in stats_results:
-            filename = f'data/results/zscores_{timestamp}.csv'
-            stats_results['zscores'].to_csv(filename)
-            print(f"  ✓ Z-scores: {filename}")
-
-        # Save summary
-        summary_file = f'data/results/summary_{timestamp}.txt'
-        with open(summary_file, 'w') as f:
-            f.write(f"Analysis Summary - {timestamp}\n")
-            f.write("=" * 50 + "\n")
-
-            if synthetic_results:
-                f.write(f"\nSynthetic Analysis:\n")
-                f.write(f"  Positions analyzed: {len(synthetic_results['batch_results'])}\n")
-                f.write(f"  Average savings: ${synthetic_results['avg_savings']:.0f}\n")
-
-            if stats_results and 'hypothesis' in stats_results:
-                hyp = stats_results['hypothesis']
-                f.write(f"\nStatistical Significance:\n")
-                f.write(f"  t-statistic: {hyp.get('t_stat', 0):.2f}\n")
-                f.write(f"  p-value: {hyp.get('p_value', 0):.4f}\n")
-                f.write(f"  Significant: {hyp.get('reject_null', False)}\n")
-
-        print(f"  ✓ Summary: {summary_file}")
+def save_results(results: dict, output_dir: str = None):
+    """Save DataFrames to CSV files"""
+    output_dir = output_dir or config.PATH_CONFIG['results_path']
+    os.makedirs(output_dir, exist_ok=True)
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    saved = 0
+    
+    for name, data in results.items():
+        if isinstance(data, pd.DataFrame) and not data.empty:
+            data.to_csv(f"{output_dir}/{name}_{timestamp}.csv")
+            saved += 1
+    
+    print(f"Saved {saved} files to {output_dir}")
 
 
-def main():
-    """Main function using unified interface"""
-    args = parse_args()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+def print_summary(market_data, pricing_results, statistical_results, risk_results=None):
+    """Print analysis summary"""
+    print("\n" + "="*60)
+    print("SUMMARY")
+    print("="*60)
+    
+    # Market data
+    m = market_data['metadata']
+    print(f"\nMarket Data: {m['num_tickers']} tickers, {m['trading_days']} days")
+    
+    # Pricing
+    p = pricing_results['summary']
+    if 'avg_synthetic_cost' in p:
+        print(f"\nPricing:")
+        print(f"  Synthetic: ${p['avg_synthetic_cost']:,.0f}, Cash: ${p['avg_cash_long_cost']:,.0f}")
+        print(f"  Savings: ${p['total_savings_vs_long']:,.0f}, Recs: {p['recommendations']}")
+    
+    # Statistical
+    s = statistical_results['summary']
+    print(f"\nStatistical: Models fitted: {s['models_fitted']}")
+    if 'avg_r_squared' in s:
+        print(f"  Avg R²: {s['avg_r_squared']:.3f}")
+    if 'hypothesis_test' in s:
+        h = s['hypothesis_test']
+        sig = 'Yes' if h['significant'] else 'No'
+        print(f"  Significant: {sig}, Mean savings: {h['mean_savings']*10000:.1f} bps (p={h['p_value']:.4f})")
+    
+    # Risk
+    if risk_results:
+        r = risk_results['portfolio_summary']
+        mc = risk_results['monte_carlo']['portfolio']
+        print(f"\nRisk (Portfolio ${r['total_value']:,.0f}):")
+        print(f"  VaR: ${abs(r['var_95']):,.0f}, CVaR: ${abs(r['cvar_95']):,.0f}")
+        print(f"  Sharpe: {r['sharpe_ratio']:.2f}, Sortino: {r['sortino_ratio']:.2f}, Max DD: {r['max_drawdown']:.2%}")
+        print(f"  MC Projection: ${mc['mean_final']:,.0f} (worst 5%: ${mc['worst_5pct']:,.0f}, prob loss: {mc['prob_loss']:.1%})")
+    
+    # Signals
+    signals = statistical_results.get('zscore_signals', {})
+    if signals:
+        print(f"\nTop 5 Signals:")
+        for ticker, signal_df in list(signals.items())[:5]:
+            if not signal_df.empty:
+                current = signal_df.iloc[-1]
+                print(f"  {ticker}: {current['signal']:<12} (z={current['zscore']:>6.2f})")
+    
+    print("="*60 + "\n")
 
-    print("=" * 60)
-    print("SYNTHETIC SPREAD ARBITRAGE OPTIMIZER")
-    print("=" * 60)
 
-    # 1. Data Pipeline
-    print("\n[1] DATA PIPELINE")
-    print("-" * 40)
-    pipeline = DataPipeline()
-
-    if args.quick:
-        args.tickers = args.tickers[:2]
-        args.start = '2024-01-01'
-        args.end = '2024-02-01'
-
-    data = pipeline.run_complete_pipeline(
-        tickers=args.tickers,
-        start_date=args.start,
-        end_date=args.end,
-        include_vix=args.stats
-    )
-
-    # 2. Synthetic Analysis
-    print("\n[2] SYNTHETIC PRICING")
-    print("-" * 40)
-    pricer = SyntheticPricer()
-
-    synthetic_results = pricer.run_complete_analysis(
-        prices=data['prices'],
-        volatility=data['volatility'],
-        dividends=data['dividends'],
-        notional=100000,
-        days=90
-    )
-
-    # 3. Statistical Analysis (if requested)
-    stats_results = None
-    if args.stats and 'spreads' in synthetic_results:
-        print("\n[3] STATISTICAL ANALYSIS")
-        print("-" * 40)
-
-        model = StatisticalModels()
-
-        # Get savings data for hypothesis test
-        savings_data = None
-        if 'batch_results' in synthetic_results:
-            batch_df = synthetic_results['batch_results']
-            if 'savings' in batch_df.columns:
-                savings_data = batch_df['savings'].dropna()
-
-        stats_results = model.run_complete_analysis(
-            spreads=synthetic_results['spreads'],
-            volatility=data['volatility'],
-            returns=data['returns'],
-            vix=data['vix'],
-            savings_data=savings_data
+def run_analysis(tickers: list = None,
+                start_date: str = None,
+                end_date: str = None,
+                force_download: bool = False,
+                save_output: bool = True,
+                position_value: float = 1000000,
+                run_risk_analysis: bool = True):
+    """Run complete analysis pipeline"""
+    
+    print("\nSynthetic Spread Arbitrage Analysis")
+    print("="*60)
+    
+    # Defaults
+    tickers = tickers or config.DATA_CONFIG['tickers']
+    start_date = start_date or config.DATA_CONFIG['start_date']
+    end_date = end_date or config.DATA_CONFIG['end_date']
+    
+    print(f"Tickers: {len(tickers)}, Period: {start_date} to {end_date}")
+    if run_risk_analysis:
+        print(f"Risk analysis: ${position_value:,.0f} per ticker")
+    print()
+    
+    try:
+        # Step 1: Market data
+        print("Step 1: Collecting market data...")
+        pipeline = DataPipeline()
+        market_data = pipeline.run_full_pipeline(
+            tickers=tickers,
+            start_date=start_date,
+            end_date=end_date,
+            force_download=force_download
         )
-
-    # 4. Save Results
-    print("\n[4] SAVING RESULTS")
-    print("-" * 40)
-    save_all_results(data, synthetic_results, stats_results, timestamp)
-
-    # 5. Final Summary
-    print("\n" + "=" * 60)
-    print("ANALYSIS COMPLETE")
-    print("=" * 60)
-
-    # Quick summary
-    if synthetic_results:
-        print(f"\nSynthetic Analysis Summary:")
-        print(f"  Positions: {len(synthetic_results['batch_results'])}")
-        print(f"  Avg Savings: ${synthetic_results['avg_savings']:.0f}")
-
-    if stats_results and 'hypothesis' in stats_results:
-        hyp = stats_results['hypothesis']
-        if hyp.get('reject_null', False):
-            print(f"\n✓ Statistically significant savings (p = {hyp.get('p_value', 0):.4f})")
-
-    print(f"\nTime: {datetime.now().strftime('%H:%M:%S')}")
-    print("Results saved to: data/results/")
+        
+        # Step 2: Pricing
+        print("\nStep 2: Running pricing analysis...")
+        pricer = SyntheticPricer()
+        pricing_results = pricer.run_full_pricing_analysis(
+            data=market_data,
+            days=90,
+            notional=100000,
+            tax_rate=0.30
+        )
+        
+        # Step 3: Statistical
+        print("\nStep 3: Running statistical analysis...")
+        stats = StatisticalModels(verbose=False)
+        statistical_results = stats.run_full_statistical_analysis(
+            market_data=market_data,
+            pricing_results=pricing_results,
+            lookback_days=252
+        )
+        
+        # Step 4: Risk (optional)
+        risk_results = None
+        if run_risk_analysis:
+            print("\nStep 4: Running risk analysis...")
+            risk = RiskAnalytics()
+            risk_results = risk.run_full_risk_analysis(
+                market_data=market_data,
+                pricing_results=pricing_results,
+                statistical_results=statistical_results,
+                position_value=position_value,
+                confidence_level=0.95,
+                risk_free_rate=0.045,
+                n_simulations=10000,
+                time_horizon=252,
+                run_scenarios=True
+            )
+        
+        # Print summary
+        print_summary(market_data, pricing_results, statistical_results, risk_results)
+        
+        # Save results
+        if save_output:
+            print("Saving results...")
+            to_save = {
+                'current_analysis': pricing_results['current_analysis'],
+                'spread_stats': pricing_results['spread_stats'],
+                'historical_basis': pricing_results['historical_basis'],
+                'zscores': statistical_results['zscores'],
+                'spread_predictions': statistical_results['spread_predictions']
+            }
+            
+            if risk_results:
+                to_save['risk_by_ticker'] = pd.DataFrame(risk_results['by_ticker']).T
+                to_save['monte_carlo_by_ticker'] = pd.DataFrame(risk_results['monte_carlo']['by_ticker']).T
+            
+            save_results(to_save)
+        
+        print("Analysis complete\n")
+        
+        return {
+            'market_data': market_data,
+            'pricing_results': pricing_results,
+            'statistical_results': statistical_results,
+            'risk_results': risk_results,
+            'status': 'SUCCESS'
+        }
+    
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {'status': 'FAILED', 'error': str(e)}
 
 
 if __name__ == "__main__":
-    main()
+    # Quick test: python main.py quick
+    # Full analysis: python main.py
+    
+    if len(sys.argv) > 1 and sys.argv[1] == 'quick':
+        results = run_analysis(
+            tickers=['AAPL', 'MSFT', 'GOOGL'],
+            start_date='2024-01-01',
+            end_date='2024-12-31'
+        )
+    else:
+        results = run_analysis()
+    
+    sys.exit(0 if results['status'] == 'SUCCESS' else 1)
