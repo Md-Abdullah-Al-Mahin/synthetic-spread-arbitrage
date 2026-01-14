@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple, Optional, Any, Union
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.linear_model import LinearRegression
 from arch import  arch_model
+from scipy import stats
 
 class StatisticalModels:
     """Statistical models for analyzing and forecasting synthetic spreads"""
@@ -786,3 +787,75 @@ class StatisticalModels:
         print(f"\nBest model: ARIMA{best_order['order']} (AIC={best_order['aic']:.2f})")
 
         return comparison_df
+
+    def hypothesis_test_cost_savings(self,
+                                     savings_data: Union[pd.Series, List[float], np.ndarray],
+                                     alpha: float = 0.05) -> Dict[str, Any]:
+        """
+        Simple hypothesis test: Are savings statistically significant?
+
+        H₀: Mean savings ≤ 0 (no benefit)
+        H₁: Mean savings > 0 (real benefit)
+        """
+        # Convert to array and clean
+        if isinstance(savings_data, pd.Series):
+            data = savings_data.dropna().values
+        elif isinstance(savings_data, list):
+            data = np.array(savings_data)
+        else:
+            data = savings_data
+
+        data = data[~np.isnan(data)]
+
+        if len(data) < 2:
+            return {'error': 'Need at least 2 observations'}
+
+        # Basic stats
+        n = len(data)
+        mean_savings = np.mean(data)
+        std_savings = np.std(data, ddof=1)
+
+        # t-test
+        t_stat, p_value = stats.ttest_1samp(data, 0, alternative='greater')
+
+        # Confidence interval
+        ci_lower, ci_upper = stats.t.interval(1 - alpha, n - 1,
+                                              loc=mean_savings,
+                                              scale=std_savings / np.sqrt(n))
+
+        # Result
+        reject_h0 = p_value < alpha
+
+        return {
+            'n': n,
+            'mean': mean_savings,
+            'std': std_savings,
+            't_stat': t_stat,
+            'p_value': p_value,
+            'reject_null': reject_h0,
+            'ci_95': (ci_lower, ci_upper),
+            'alpha': alpha
+        }
+
+    def print_hypothesis_test_summary(self, results: Dict[str, Any]):
+        """Simple print of hypothesis test results"""
+        if 'error' in results:
+            print(f"Error: {results['error']}")
+            return
+
+        print(f"\nHypothesis Test Results:")
+        print(f"  Observations: {results['n']}")
+        print(f"  Mean savings: {results['mean']:.6f} ({results['mean'] * 10000:.1f} bps)")
+        print(f"  t-statistic: {results['t_stat']:.2f}")
+        print(f"  p-value: {results['p_value']:.4f}")
+
+        ci_lower, ci_upper = results['ci_95']
+        print(f"  95% CI: [{ci_lower:.6f}, {ci_upper:.6f}]")
+
+        print(f"\nConclusion:")
+        if results['reject_null']:
+            print(f"  REJECT null hypothesis (p < {results['alpha']})")
+            print(f"  Savings are statistically significant")
+        else:
+            print(f"  Cannot reject null hypothesis (p ≥ {results['alpha']})")
+            print(f"  No evidence of significant savings")

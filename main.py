@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Synthetic Spread Arbitrage Optimizer
+Synthetic Spread Arbitrage Optimizer - Unified Interface
 """
 
 import sys
@@ -12,152 +12,145 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.data_pipeline import DataPipeline
 from src.synthetic_pricer import SyntheticPricer
+from src.statistical_models import StatisticalModels
 
 
 def parse_args():
-    """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description="Synthetic Spread Arbitrage Optimizer")
-    parser.add_argument('--tickers', nargs='+', help='Stock tickers to analyze')
-    parser.add_argument('--start', help='Start date (YYYY-MM-DD)')
-    parser.add_argument('--end', help='End date (YYYY-MM-DD)')
-    parser.add_argument('--notional', type=float, default=100000, help='Position size in dollars')
-    parser.add_argument('--days', type=int, default=90, help='Holding period in days')
-    parser.add_argument('--quick', action='store_true', help='Quick mode for testing')
+    """Simple command line arguments"""
+    parser = argparse.ArgumentParser(description="Synthetic Spread Optimizer")
+    parser.add_argument('--tickers', nargs='+', default=['AAPL', 'MSFT'],
+                        help='Stock tickers (default: AAPL MSFT)')
+    parser.add_argument('--start', default='2024-01-01', help='Start date')
+    parser.add_argument('--end', default='2024-06-01', help='End date')
+    parser.add_argument('--stats', action='store_true', help='Run statistical analyses')
+    parser.add_argument('--quick', action='store_true', help='Quick test mode')
     return parser.parse_args()
 
-def run_data_pipeline(tickers=None, start=None, end=None, quick=False, include_vix=True):
-    """Run the data pipeline to fetch and process market data"""
-    print("Data Pipeline")
-    print("-" * 50)
 
-    pipeline = DataPipeline()
-
-    # Override defaults if provided
-    if tickers:
-        pipeline.tickers = tickers
-    if quick:
-        pipeline.tickers = pipeline.tickers[:3]
-        start = '2024-01-01'
-    if start:
-        pipeline.start_date = start
-    if end:
-        pipeline.end_date = end
-
-    print("Fetching market data...")
-
-    # Use the new comprehensive method
-    data_dict = pipeline.get_market_data_complete(
-        tickers=pipeline.tickers,
-        start_date=pipeline.start_date,
-        end_date=pipeline.end_date,
-        include_vix=include_vix,
-        include_liquidity=False,
-        force_download=False
-    )
-
-    # Extract the data
-    prices = data_dict['prices']
-    returns = data_dict['returns']
-    volatility = data_dict['volatility']
-    dividends = data_dict['dividends']
-    vix = data_dict['vix']
-
-    # Return all data including VIX
-    return prices, returns, volatility, dividends, vix
-
-
-def run_analysis(prices, volatility, dividends, notional=100000, days=90):
-    """Run synthetic pricer analysis"""
-    print("\nSynthetic Pricer")
-    print("-" * 50)
-
-    pricer = SyntheticPricer()
-
-    print("Financing cost example:")
-    pricer.calculate_financing_cost(notional=notional, days=days)
-
-    print("\nBatch cost analysis...")
-    results = pricer.batch_cost_analysis(
-        tickers=prices.columns.tolist(),
-        prices=prices,
-        volatilities=volatility,
-        dividends=dividends if not dividends.empty else None,
-        days=days,
-        notional=notional,
-        tax_rate=0.30
-    )
-
-    if not results.empty:
-        print_results(results)
-
-    return results
-
-
-def print_results(results):
-    """Print analysis results"""
-    print(f"\nResults for {len(results)} tickers:")
-
-    # Count recommendations
-    rec_counts = results['comparison'].apply(lambda x: x['recommendation']).value_counts()
-    print("\nRecommendation Summary:")
-    for rec, count in rec_counts.items():
-        print(f"  {rec.replace('_', ' ').title()}: {count} tickers")
-
-    # Show top 5 by savings
-    results['savings'] = results['comparison'].apply(lambda x: x.get('savings', x.get('synthetic_vs_long', 0)))
-    top_savings = results.nlargest(5, 'savings')
-
-    print("\nTop 5 Savings (vs Long Cash):")
-    for _, row in top_savings.iterrows():
-        print(f"  {row['ticker']}: ${row['savings']:.0f}")
-
-
-def save_results(results):
-    """Save results to file"""
-    if results.empty:
-        print("No results to save")
-        return None
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+def save_all_results(data, synthetic_results, stats_results, timestamp):
+    """Save all results to files"""
     os.makedirs('data/results', exist_ok=True)
 
-    filename = f'data/results/results_{timestamp}.csv'
-    results.to_csv(filename, index=False)
-    print(f"\nResults saved: {filename}")
+    # Save synthetic results
+    if synthetic_results and 'batch_results' in synthetic_results:
+        filename = f'data/results/synthetic_{timestamp}.csv'
+        synthetic_results['batch_results'].to_csv(filename, index=False)
+        print(f"  ✓ Synthetic results: {filename}")
 
-    return filename
+    # Save statistical results
+    if stats_results:
+        # Save Z-scores
+        if 'zscores' in stats_results:
+            filename = f'data/results/zscores_{timestamp}.csv'
+            stats_results['zscores'].to_csv(filename)
+            print(f"  ✓ Z-scores: {filename}")
+
+        # Save summary
+        summary_file = f'data/results/summary_{timestamp}.txt'
+        with open(summary_file, 'w') as f:
+            f.write(f"Analysis Summary - {timestamp}\n")
+            f.write("=" * 50 + "\n")
+
+            if synthetic_results:
+                f.write(f"\nSynthetic Analysis:\n")
+                f.write(f"  Positions analyzed: {len(synthetic_results['batch_results'])}\n")
+                f.write(f"  Average savings: ${synthetic_results['avg_savings']:.0f}\n")
+
+            if stats_results and 'hypothesis' in stats_results:
+                hyp = stats_results['hypothesis']
+                f.write(f"\nStatistical Significance:\n")
+                f.write(f"  t-statistic: {hyp.get('t_stat', 0):.2f}\n")
+                f.write(f"  p-value: {hyp.get('p_value', 0):.4f}\n")
+                f.write(f"  Significant: {hyp.get('reject_null', False)}\n")
+
+        print(f"  ✓ Summary: {summary_file}")
 
 
 def main():
-    """Main execution function"""
+    """Main function using unified interface"""
     args = parse_args()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
     print("=" * 60)
-    print("Synthetic Spread Arbitrage Optimizer")
-    print(f"Start: {datetime.now().strftime('%H:%M:%S')}")
+    print("SYNTHETIC SPREAD ARBITRAGE OPTIMIZER")
     print("=" * 60)
 
-    # Run data pipeline
-    prices, returns, volatility, dividends, vix = run_data_pipeline(
+    # 1. Data Pipeline
+    print("\n[1] DATA PIPELINE")
+    print("-" * 40)
+    pipeline = DataPipeline()
+
+    if args.quick:
+        args.tickers = args.tickers[:2]
+        args.start = '2024-01-01'
+        args.end = '2024-02-01'
+
+    data = pipeline.run_complete_pipeline(
         tickers=args.tickers,
-        start=args.start,
-        end=args.end,
-        quick=args.quick
+        start_date=args.start,
+        end_date=args.end,
+        include_vix=args.stats
     )
 
-    # Run analysis
-    results = run_analysis(
-        prices=prices,
-        volatility=volatility,
-        dividends=dividends,
-        notional=args.notional,
-        days=args.days
+    # 2. Synthetic Analysis
+    print("\n[2] SYNTHETIC PRICING")
+    print("-" * 40)
+    pricer = SyntheticPricer()
+
+    synthetic_results = pricer.run_complete_analysis(
+        prices=data['prices'],
+        volatility=data['volatility'],
+        dividends=data['dividends'],
+        notional=100000,
+        days=90
     )
 
-    # Save results
-    save_results(results)
+    # 3. Statistical Analysis (if requested)
+    stats_results = None
+    if args.stats and 'spreads' in synthetic_results:
+        print("\n[3] STATISTICAL ANALYSIS")
+        print("-" * 40)
 
-    print(f"\nDone: {datetime.now().strftime('%H:%M:%S')}")
+        model = StatisticalModels()
+
+        # Get savings data for hypothesis test
+        savings_data = None
+        if 'batch_results' in synthetic_results:
+            batch_df = synthetic_results['batch_results']
+            if 'savings' in batch_df.columns:
+                savings_data = batch_df['savings'].dropna()
+
+        stats_results = model.run_complete_analysis(
+            spreads=synthetic_results['spreads'],
+            volatility=data['volatility'],
+            returns=data['returns'],
+            vix=data['vix'],
+            savings_data=savings_data
+        )
+
+    # 4. Save Results
+    print("\n[4] SAVING RESULTS")
+    print("-" * 40)
+    save_all_results(data, synthetic_results, stats_results, timestamp)
+
+    # 5. Final Summary
+    print("\n" + "=" * 60)
+    print("ANALYSIS COMPLETE")
+    print("=" * 60)
+
+    # Quick summary
+    if synthetic_results:
+        print(f"\nSynthetic Analysis Summary:")
+        print(f"  Positions: {len(synthetic_results['batch_results'])}")
+        print(f"  Avg Savings: ${synthetic_results['avg_savings']:.0f}")
+
+    if stats_results and 'hypothesis' in stats_results:
+        hyp = stats_results['hypothesis']
+        if hyp.get('reject_null', False):
+            print(f"\n✓ Statistically significant savings (p = {hyp.get('p_value', 0):.4f})")
+
+    print(f"\nTime: {datetime.now().strftime('%H:%M:%S')}")
+    print("Results saved to: data/results/")
 
 
 if __name__ == "__main__":
