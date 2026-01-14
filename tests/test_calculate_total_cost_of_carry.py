@@ -259,16 +259,75 @@ def test_integration_with_data_pipeline():
             recommendations = []
             for _, row in batch_result.iterrows():
                 rec = row['comparison']['recommendation']
-                savings = row['comparison']['savings']
-                recommendations.append((row['ticker'], rec, savings))
+                # Use the correct field names from the class
+                savings_vs_long = row['comparison']['synthetic_vs_long']
+                savings_vs_short = row['comparison']['synthetic_vs_short']
 
-            print("\nRecommendations:")
-            for ticker, rec, savings in recommendations:
-                action = "USE SYNTHETIC" if rec == "SYNTHETIC" else "USE CASH"
-                print(f"  {ticker}: {action} (savings: ${savings:.2f})")
+                # Determine savings based on recommendation
+                if rec == 'SYNTHETIC':
+                    # Synthetic is cheapest
+                    savings = min(savings_vs_long, savings_vs_short)
+                    if savings < 0:
+                        savings_desc = f"saves ${-savings:.0f}"
+                    else:
+                        savings_desc = f"costs ${savings:.0f} more"
+                else:
+                    # Cash is cheapest
+                    if rec == 'CASH_LONG':
+                        savings = -savings_vs_long  # Negative of synthetic_vs_long
+                    else:  # CASH_SHORT
+                        savings = -savings_vs_short  # Negative of synthetic_vs_short
 
-        return batch_result
+                    if savings > 0:
+                        savings_desc = f"saves ${savings:.0f}"
+                    else:
+                        savings_desc = f"costs ${-savings:.0f} more"
 
-    except ImportError as e:
-        print(f"Could not import DataPipeline: {e}")
-        return None
+                recommendations.append({
+                    'ticker': row['ticker'],
+                    'recommendation': rec,
+                    'savings': savings,
+                    'savings_desc': savings_desc
+                })
+
+            # Display results
+            print("\nRecommendation Summary:")
+            for rec in recommendations:
+                print(f"  {rec['ticker']}: {rec['recommendation']} ({rec['savings_desc']})")
+
+            # Count recommendations
+            rec_counts = {}
+            for rec in recommendations:
+                rec_type = rec['recommendation']
+                rec_counts[rec_type] = rec_counts.get(rec_type, 0) + 1
+
+            print(f"\nRecommendation Counts:")
+            for rec_type, count in rec_counts.items():
+                print(f"  {rec_type}: {count} tickers")
+
+            # Show cost details for each ticker
+            print("\nDetailed Cost Analysis:")
+            for _, row in batch_result.iterrows():
+                print(f"\n{row['ticker']}:")
+                print(f"  Synthetic: ${row['synthetic_cost']['total']:.0f}")
+                print(f"  Cash Long: ${row['cash_cost']['long']['total']:.0f}")
+                print(f"  Cash Short: ${row['cash_cost']['short']['total']:.0f}")
+                print(f"  Recommendation: {row['comparison']['recommendation']}")
+
+                # Show basis if synthetic_rate is available
+                if 'synthetic_rate' in row:
+                    synthetic_rate = row['synthetic_rate']
+                    cash_rate = 0.045  # Use SOFR rate
+                    basis = pricer.calculate_basis(synthetic_rate, cash_rate)
+                    print(f"  Basis: {basis * 100:.2f}%")
+
+            return batch_result
+        else:
+            print("No results from batch analysis")
+            return pd.DataFrame()
+
+    except Exception as e:
+        print(f"Integration test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return pd.DataFrame()

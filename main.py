@@ -25,8 +25,7 @@ def parse_args():
     parser.add_argument('--quick', action='store_true', help='Quick mode for testing')
     return parser.parse_args()
 
-
-def run_data_pipeline(tickers=None, start=None, end=None, quick=False):
+def run_data_pipeline(tickers=None, start=None, end=None, quick=False, include_vix=True):
     """Run the data pipeline to fetch and process market data"""
     print("Data Pipeline")
     print("-" * 50)
@@ -45,18 +44,26 @@ def run_data_pipeline(tickers=None, start=None, end=None, quick=False):
         pipeline.end_date = end
 
     print("Fetching market data...")
-    prices = pipeline.fetch_market_data()
 
-    print("Calculating returns...")
-    returns = pipeline.calculate_returns(prices)
+    # Use the new comprehensive method
+    data_dict = pipeline.get_market_data_complete(
+        tickers=pipeline.tickers,
+        start_date=pipeline.start_date,
+        end_date=pipeline.end_date,
+        include_vix=include_vix,
+        include_liquidity=False,
+        force_download=False
+    )
 
-    print("Calculating volatility...")
-    volatility = pipeline.calculate_realized_volatility(returns, window=30)
+    # Extract the data
+    prices = data_dict['prices']
+    returns = data_dict['returns']
+    volatility = data_dict['volatility']
+    dividends = data_dict['dividends']
+    vix = data_dict['vix']
 
-    print("Fetching dividends...")
-    dividends = pipeline.get_dividend_data()
-
-    return prices, returns, volatility, dividends
+    # Return all data including VIX
+    return prices, returns, volatility, dividends, vix
 
 
 def run_analysis(prices, volatility, dividends, notional=100000, days=90):
@@ -131,7 +138,7 @@ def main():
     print("=" * 60)
 
     # Run data pipeline
-    prices, returns, volatility, dividends = run_data_pipeline(
+    prices, returns, volatility, dividends, vix = run_data_pipeline(
         tickers=args.tickers,
         start=args.start,
         end=args.end,
