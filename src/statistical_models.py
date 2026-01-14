@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any
-from pandas import Series
+from typing import Dict, List, Tuple, Optional, Any, Union
+from statsmodels.tsa.arima.model import ARIMA
 from sklearn.linear_model import LinearRegression
 from arch import  arch_model
 
@@ -473,3 +473,316 @@ class StatisticalModels:
                     continue
 
         return spread_forecasts
+
+    def calculate_zscore(self,
+                         series: Union[pd.Series, pd.DataFrame],
+                         lookback_days: int = None,
+                         min_periods: int = 20) -> Union[pd.Series, pd.DataFrame]:
+        """
+        Calculate Z-scores to identify abnormal spread levels
+
+        Formula: Z = (Current Value - Rolling Mean) / Rolling Std Dev
+        """
+        if lookback_days is None:
+            lookback_days = self.lookback_days
+
+        print(f"Calculating Z-scores ({lookback_days}-day lookback)")
+
+        if isinstance(series, pd.Series):
+            rolling_mean = series.rolling(window=lookback_days, min_periods=min_periods).mean()
+            rolling_std = series.rolling(window=lookback_days, min_periods=min_periods).std()
+            zscore = (series - rolling_mean) / rolling_std
+
+            print(f"  {series.name or 'Series'}: mean={rolling_mean.iloc[-1]:.6f}, "
+                  f"std={rolling_std.iloc[-1]:.6f}, current Z={zscore.iloc[-1]:.2f}")
+
+            return zscore
+
+        elif isinstance(series, pd.DataFrame):
+            zscores = pd.DataFrame(index=series.index)
+
+            for column in series.columns:
+                col_series = series[column]
+                rolling_mean = col_series.rolling(window=lookback_days, min_periods=min_periods).mean()
+                rolling_std = col_series.rolling(window=lookback_days, min_periods=min_periods).std()
+                zscores[column] = (col_series - rolling_mean) / rolling_std
+
+                if not col_series.empty:
+                    print(f"  {column}: mean={rolling_mean.iloc[-1]:.6f}, "
+                          f"std={rolling_std.iloc[-1]:.6f}, current Z={zscores[column].iloc[-1]:.2f}")
+
+            return zscores
+
+        else:
+            raise TypeError(f"Unsupported type: {type(series)}")
+
+    def interpret_zscore(self,
+                         zscore: float,
+                         threshold: float = 2.0) -> Dict[str, Any]:
+        """
+        Interpret Z-score for trading decisions
+        """
+        abs_z = abs(zscore)
+
+        if abs_z > threshold:
+            significance = "SIGNIFICANT"
+            if zscore < -threshold:
+                direction = "BELOW"
+                signal = "LONG_BASIS"  # Synthetic is cheap
+            else:
+                direction = "ABOVE"
+                signal = "SHORT_BASIS"  # Synthetic is expensive
+        else:
+            significance = "NORMAL"
+            direction = "WITHIN"
+            signal = "NEUTRAL"
+
+        # Calculate probability (assuming normal distribution)
+        from scipy import stats
+        prob_extreme = 2 * (1 - stats.norm.cdf(abs_z))  # Two-tailed probability
+
+        interpretation = {
+            'zscore': zscore,
+            'abs_zscore': abs_z,
+            'significance': significance,
+            'direction': direction,
+            'signal': signal,
+            'threshold': threshold,
+            'prob_extreme': prob_extreme,
+            'interpretation': self._get_zscore_interpretation(zscore, threshold)
+        }
+
+        return interpretation
+
+    def _get_zscore_interpretation(self, zscore: float, threshold: float) -> str:
+        """Get human-readable interpretation of Z-score"""
+        abs_z = abs(zscore)
+
+        if abs_z > 2.5:
+            level = "EXTREMELY"
+        elif abs_z > 2.0:
+            level = "VERY"
+        elif abs_z > 1.5:
+            level = "MODERATELY"
+        elif abs_z > 1.0:
+            level = "SLIGHTLY"
+        else:
+            level = "WITHIN"
+
+        if zscore < -threshold:
+            return f"{level} BELOW average (synthetic appears CHEAP)"
+        elif zscore > threshold:
+            return f"{level} ABOVE average (synthetic appears EXPENSIVE)"
+        else:
+            return f"{level} normal range"
+
+    def fit_arima_model(self,
+                        series: pd.Series,
+                        p: int = 1,
+                        d: int = 1,
+                        q: int = 1,
+                        forecast_steps: int = 5) -> Dict[str, Any]:
+        """
+        Fit ARIMA model for time series forecasting
+
+        ARIMA(p, d, q):
+        - p = autoregressive terms
+        - d = differencing order
+        - q = moving average terms
+        """
+
+        if len(series) < 50:
+            print(f"Warning: Series too short for ARIMA ({len(series)} points)")
+            return {}
+
+        print(f"Fitting ARIMA({p},{d},{q}) model...")
+        print(f"  Series: {series.name or 'unnamed'}, {len(series)} points")
+
+        try:
+            # Fit ARIMA model
+            model = ARIMA(series, order=(p, d, q))
+            fitted = model.fit()
+
+            # Generate forecast
+            forecast = fitted.forecast(steps=forecast_steps)
+            forecast_index = pd.date_range(
+                start=series.index[-1] + pd.Timedelta(days=1),
+                periods=forecast_steps,
+                freq='B'
+            )
+
+            # Get model summary
+            params = fitted.params
+            aic = fitted.aic
+            bic = fitted.bic
+            resid = fitted.resid
+
+            # Calculate forecast confidence intervals (simplified)
+            resid_std = resid.std()
+            conf_int = pd.DataFrame({
+                'lower': forecast - 1.96 * resid_std,
+                'upper': forecast + 1.96 * resid_std
+            }, index=forecast_index)
+
+            # Store results
+            results = {
+                'fitted_model': fitted,
+                'order': (p, d, q),
+                'params': params.to_dict(),
+                'aic': aic,
+                'bic': bic,
+                'residuals': resid,
+                'residual_std': resid_std,
+                'forecast': forecast,
+                'forecast_index': forecast_index,
+                'confidence_interval': conf_int,
+                'last_value': series.iloc[-1],
+                'forecast_steps': forecast_steps,
+                'forecast_trend': self._calculate_forecast_trend(forecast)
+            }
+
+            # Print summary
+            print(f"  Model fit: AIC={aic:.2f}, BIC={bic:.2f}")
+            print(f"  Last value: {series.iloc[-1]:.6f}")
+            print(f"  {forecast_steps}-step forecast: {forecast.iloc[-1]:.6f}")
+            print(f"  Forecast trend: {results['forecast_trend']}")
+
+            return results
+
+        except Exception as e:
+            print(f"Error fitting ARIMA model: {e}")
+            return {}
+
+    def _calculate_forecast_trend(self, forecast: pd.Series) -> str:
+        """Determine trend direction from forecast"""
+        if len(forecast) < 2:
+            return "UNKNOWN"
+
+        start = forecast.iloc[0]
+        end = forecast.iloc[-1]
+        change = end - start
+        change_pct = (change / start) * 100 if start != 0 else 0
+
+        if change_pct > 1.0:
+            return "STRONGLY_UP"
+        elif change_pct > 0.2:
+            return "MODERATELY_UP"
+        elif change_pct > -0.2:
+            return "FLAT"
+        elif change_pct > -1.0:
+            return "MODERATELY_DOWN"
+        else:
+            return "STRONGLY_DOWN"
+
+    def forecast_spread_trends(self,
+                               spreads: pd.DataFrame,
+                               p: int = 1,
+                               d: int = 1,
+                               q: int = 1,
+                               forecast_steps: int = 5) -> Dict[str, Any]:
+        """
+        Forecast spread trends for multiple tickers using ARIMA
+        """
+        results = {}
+
+        print(f"Forecasting spread trends for {len(spreads.columns)} tickers")
+        print(f"ARIMA({p},{d},{q}), {forecast_steps}-step forecast")
+
+        for ticker in spreads.columns:
+            series = spreads[ticker].dropna()
+
+            if len(series) < 50:
+                print(f"  {ticker}: Skipped (insufficient data: {len(series)} points)")
+                continue
+
+            print(f"  {ticker}...", end="")
+            arima_result = self.fit_arima_model(series, p, d, q, forecast_steps)
+
+            if arima_result:
+                results[ticker] = arima_result
+                current = series.iloc[-1]
+                forecast = arima_result['forecast'].iloc[-1]
+                change = forecast - current
+                change_bps = change * 10000
+
+                print(f" done: {current:.6f} → {forecast:.6f} (Δ={change_bps:+.1f} bps)")
+            else:
+                print(f" failed")
+
+        # Print summary
+        if results:
+            print(f"\nForecast Summary:")
+            print(f"{'Ticker':<8} {'Current':<12} {'Forecast':<12} {'Change':<12} {'Trend':<15}")
+            print("-" * 60)
+
+            for ticker, res in results.items():
+                current = res['last_value']
+                forecast = res['forecast'].iloc[-1]
+                change = forecast - current
+                change_bps = change * 10000
+                trend = res['forecast_trend']
+
+                print(f"{ticker:<8} {current:.6f}    {forecast:.6f}    {change_bps:+.1f} bps     {trend}")
+
+        return results
+
+    def compare_arima_orders(self,
+                             series: pd.Series,
+                             orders: List[Tuple[int, int, int]] = None,
+                             forecast_steps: int = 5) -> pd.DataFrame:
+        """
+        Compare different ARIMA orders to find best fit
+        """
+        if orders is None:
+            orders = [
+                (1, 1, 1),  # Basic ARIMA
+                (2, 1, 2),  # More complex
+                (0, 1, 1),  # Simple MA
+                (1, 0, 0),  # Simple AR
+            ]
+
+        print(f"Comparing {len(orders)} ARIMA orders...")
+
+        comparison = []
+
+        for p, d, q in orders:
+            try:
+                result = self.fit_arima_model(series, p, d, q, forecast_steps)
+
+                if result:
+                    comparison.append({
+                        'order': f"({p},{d},{q})",
+                        'p': p,
+                        'd': d,
+                        'q': q,
+                        'aic': result['aic'],
+                        'bic': result['bic'],
+                        'forecast': result['forecast'].iloc[-1],
+                        'trend': result['forecast_trend'],
+                        'residual_std': result['residual_std']
+                    })
+
+            except Exception as e:
+                print(f"  ARIMA({p},{d},{q}) failed: {e}")
+                continue
+
+        if not comparison:
+            return pd.DataFrame()
+
+        comparison_df = pd.DataFrame(comparison)
+
+        # Sort by AIC (lower is better)
+        comparison_df = comparison_df.sort_values('aic')
+
+        print(f"\nARIMA Order Comparison:")
+        print(f"{'Order':<10} {'AIC':<12} {'BIC':<12} {'Forecast':<12} {'Trend':<15}")
+        print("-" * 60)
+
+        for _, row in comparison_df.iterrows():
+            print(f"{row['order']:<10} {row['aic']:.2f}    {row['bic']:.2f}    "
+                  f"{row['forecast']:.6f}    {row['trend']}")
+
+        best_order = comparison_df.iloc[0]
+        print(f"\nBest model: ARIMA{best_order['order']} (AIC={best_order['aic']:.2f})")
+
+        return comparison_df
