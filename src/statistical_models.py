@@ -6,6 +6,8 @@ from sklearn.linear_model import LinearRegression
 from arch import arch_model
 from scipy import stats
 
+import config
+
 
 class StatisticalModels:
     """Statistical models for analyzing and forecasting synthetic spreads"""
@@ -24,7 +26,7 @@ class StatisticalModels:
         Formula: Spread = β₀ + β₁·Volatility + β₂·Liquidity + β₃·VIX + ε
         """
         results = {}
-        tickers = list(set(spreads.columns) & set(volatility.columns))
+        tickers = config.DATA_CONFIG['tickers']
 
         if not tickers:
             print("No common tickers between spreads and volatility data")

@@ -36,12 +36,13 @@ class DataPipeline:
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
 
-        cache_file = f"{config.PATH_CONFIG['raw_data_path']}/market_data_{start_date}_{end_date}.csv"
+        cache_file = f"{config.PATH_CONFIG['raw_data_path']}market_data_{start_date}_{end_date}.csv"
 
         # Check cache first
         if not force_download and os.path.exists(cache_file):
             print(f"Loading market data from cache")
             self.prices = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            self.prices.index = pd.to_datetime(self.prices.index, utc=True).tz_localize(None)
             return self.prices
 
         print(f"Downloading market data for {len(tickers)} tickers...")
@@ -54,7 +55,6 @@ class DataPipeline:
 
                 if not hist.empty:
                     price_data[ticker] = hist['Close']
-                    print(f"  {ticker}: {len(hist)} days")
                 else:
                     print(f"  {ticker}: No data")
 
@@ -65,6 +65,8 @@ class DataPipeline:
             raise ValueError("No data could be downloaded for any ticker")
 
         self.prices = pd.DataFrame(price_data)
+        if hasattr(self.prices.index, 'tz') and self.prices.index.tz is not None:
+            self.prices.index = self.prices.index.tz_localize(None)
         self.prices.to_csv(cache_file)
         print(f"Saved to {cache_file}")
 
@@ -82,12 +84,14 @@ class DataPipeline:
         # Generate cache filename based on price data date range
         start_date = prices.index[0].date()
         end_date = prices.index[-1].date()
-        returns_file = f"{config.PATH_CONFIG['processed_data_path']}/daily_returns_{start_date}_{end_date}.csv"
+        returns_file = f"{config.PATH_CONFIG['processed_data_path']}daily_returns_{start_date}_{end_date}.csv"
 
         # Check cache first
         if not force_calculate and os.path.exists(returns_file):
             print(f"Loading returns from cache")
             self.returns = pd.read_csv(returns_file, index_col=0, parse_dates=True)
+            # Ensure index is timezone-naive
+            self.returns.index = pd.to_datetime(self.returns.index, utc=True).tz_localize(None)
             return self.returns
 
         print(f"Calculating returns for {len(prices.columns)} tickers")
@@ -117,12 +121,14 @@ class DataPipeline:
         # Generate cache filename based on returns data date range
         start_date = returns.index[0].date()
         end_date = returns.index[-1].date()
-        vol_file = f"{config.PATH_CONFIG['processed_data_path']}/volatility_{window}day_{start_date}_{end_date}.csv"
+        vol_file = f"{config.PATH_CONFIG['processed_data_path']}volatility_{window}day_{start_date}_{end_date}.csv"
 
         # Check cache first
         if not force_calculate and os.path.exists(vol_file):
             print(f"Loading volatility from cache")
             self.volatility = pd.read_csv(vol_file, index_col=0, parse_dates=True)
+            # Ensure index is timezone-naive
+            self.volatility.index = pd.to_datetime(self.volatility.index, utc=True).tz_localize(None)
             return self.volatility
 
         print(f"Calculating {window}-day rolling volatility...")
@@ -148,43 +154,56 @@ class DataPipeline:
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
 
-        cache_file = f"{config.PATH_CONFIG['processed_data_path']}/dividends_{start_date}_{end_date}.csv"
+        cache_file = f"{config.PATH_CONFIG['processed_data_path']}dividends_{start_date}_{end_date}.csv"
 
-        # Check cache first
         if not force_download and os.path.exists(cache_file):
             print("Loading dividend data from cache")
             self.dividends = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            # Ensure index is timezone-naive
+            self.dividends.index = pd.to_datetime(self.dividends.index, utc=True).tz_localize(None)
             return self.dividends
 
         print(f"Fetching dividend data for {len(tickers)} tickers...")
         dividend_data = []
+
+        # Track which tickers have no dividends
+        tickers_with_no_dividends = []
 
         for ticker in tickers:
             try:
                 dividends = yf.Ticker(ticker).dividends
 
                 if dividends.empty:
+                    tickers_with_no_dividends.append(ticker)
                     continue
 
+                # Remove timezone from index before comparison
+                dividends.index = dividends.index.tz_localize(None)
+
+                # Convert date strings to timezone-naive timestamps
+                start_ts = pd.Timestamp(start_date)
+                end_ts = pd.Timestamp(end_date)
+
                 # Filter by date range
-                mask = (dividends.index >= pd.Timestamp(start_date)) & \
-                       (dividends.index <= pd.Timestamp(end_date))
+                mask = (dividends.index >= start_ts) & (dividends.index <= end_ts)
                 dividends = dividends[mask]
 
                 if not dividends.empty:
                     df = pd.DataFrame({
                         'Dividend': dividends.values,
                         'Ticker': ticker
-                    }, index=dividends.index.tz_localize(None))
+                    }, index=dividends.index)
                     df.index.name = 'Date'
-
                     dividend_data.append(df)
-                    print(f"  {ticker}: {len(dividends)} payments")
+                else:
+                    tickers_with_no_dividends.append(ticker)
 
             except Exception as e:
                 print(f"  {ticker}: Error - {e}")
+                tickers_with_no_dividends.append(ticker)
 
         if dividend_data:
+            # Combine dividend data for tickers that have dividends
             combined = pd.concat(dividend_data)
             self.dividends = pd.pivot_table(
                 combined,
@@ -194,12 +213,19 @@ class DataPipeline:
                 aggfunc='sum'
             ).sort_index()
 
-            self.dividends.to_csv(cache_file)
-            print(f"Saved dividend data")
-        else:
-            print("No dividend data found")
-            self.dividends = pd.DataFrame()
+            # Add columns for tickers with no dividends (filled with 0)
+            if tickers_with_no_dividends:
+                for ticker in tickers_with_no_dividends:
+                    self.dividends[ticker] = 0
+                print(f"Tickers with no dividends: {tickers_with_no_dividends}")
 
+            self.dividends = self.dividends.reindex(columns=tickers, fill_value=0)
+            self.dividends.to_csv(cache_file)
+        else:
+            print("No dividend data found for any ticker")
+            self.dividends = pd.DataFrame(columns=tickers)
+
+        self.dividends = self.dividends.fillna(0)
         return self.dividends
 
     def calculate_dividend_yield(self,
@@ -215,11 +241,22 @@ class DataPipeline:
 
         print(f"Calculating {period} dividend yield...")
 
+        # Ensure indices are timezone-naive DatetimeIndex
+        if not isinstance(prices.index, pd.DatetimeIndex):
+            prices.index = pd.to_datetime(prices.index, utc=True).tz_localize(None)
+        elif prices.index.tz is not None:
+            prices.index = prices.index.tz_localize(None)
+
+        if not isinstance(dividends.index, pd.DatetimeIndex):
+            dividends.index = pd.to_datetime(dividends.index, utc=True).tz_localize(None)
+        elif dividends.index.tz is not None:
+            dividends.index = dividends.index.tz_localize(None)
+
         # Map period to frequency and multiplier
         freq_map = {
-            'annual': ('Y', 1),
-            'quarterly': ('Q', 4),
-            'monthly': ('M', 12)
+            'annual': ('YE', 1),
+            'quarterly': ('QE', 4),
+            'monthly': ('ME', 12)
         }
 
         if period not in freq_map:
@@ -244,7 +281,6 @@ class DataPipeline:
         # Calculate yield
         dividend_yield = (resampled_dividends / period_prices) * 100 * multiplier
 
-        print(f"Calculated yield for {len(dividend_yield)} periods")
         return dividend_yield
 
     def fetch_vix_data(self,
@@ -255,7 +291,7 @@ class DataPipeline:
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
 
-        cache_file = f"{config.PATH_CONFIG['raw_data_path']}/vix_{start_date}_{end_date}.csv"
+        cache_file = f"{config.PATH_CONFIG['raw_data_path']}vix_{start_date}_{end_date}.csv"
 
         # Check cache first
         if not force_download and os.path.exists(cache_file):
@@ -274,7 +310,6 @@ class DataPipeline:
                 self.vix.index = self.vix.index.tz_localize(None)
 
                 self.vix.to_csv(cache_file, header=True)
-                print(f"Saved VIX data: {len(self.vix)} days")
             else:
                 print("No VIX data downloaded")
                 self.vix = pd.Series(dtype=float)
@@ -295,7 +330,7 @@ class DataPipeline:
         start_date = start_date or self.start_date
         end_date = end_date or self.end_date
 
-        cache_file = f"{config.PATH_CONFIG['raw_data_path']}/liquidity_{start_date}_{end_date}.csv"
+        cache_file = f"{config.PATH_CONFIG['raw_data_path']}liquidity_{start_date}_{end_date}.csv"
 
         # Check cache first
         if not force_download and os.path.exists(cache_file):
@@ -317,7 +352,6 @@ class DataPipeline:
                     avg_dollar_volume = dollar_volume.rolling(20).mean()
                     liquidity_metric = 1 / (np.log1p(avg_dollar_volume) + 1)
                     liquidity_data[ticker] = liquidity_metric
-                    print(f"  {ticker}: {len(hist)} days")
 
             except Exception as e:
                 print(f"  {ticker}: Error - {e}")
@@ -327,9 +361,7 @@ class DataPipeline:
             self.liquidity.index = self.liquidity.index.tz_localize(None)
 
             self.liquidity.to_csv(cache_file)
-            print(f"Saved liquidity data")
         else:
-            print("No liquidity data found")
             self.liquidity = pd.DataFrame()
 
         return self.liquidity
@@ -420,9 +452,7 @@ class DataPipeline:
             'tickers': tickers,
             'start_date': start_date,
             'end_date': end_date,
-            'trading_days': len(common_dates),
             'volatility_window': volatility_window,
-            'num_tickers': len(tickers),
             'avg_volatility': volatility.mean().to_dict(),
             'avg_returns': returns.mean().to_dict(),
             'total_dividends': dividends.sum().to_dict() if not dividends.empty else {},
@@ -437,7 +467,6 @@ class DataPipeline:
             'dividend_yield': dividend_yield,
             'vix': vix_data,
             'liquidity': liquidity_data,
-            'common_dates': common_dates,
             'metadata': metadata
         }
         

@@ -1,6 +1,6 @@
 # Data settings for fetch_market_data()
 DATA_CONFIG = {
-    'tickers': ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA'],  # Just 5 stocks for testing
+    'tickers': ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'NVDA', 'GME'],  # Just 5 stocks for testing
     'start_date': '2023-01-01',
     'end_date': '2025-12-31',
     'benchmark': 'SPY',
@@ -10,6 +10,7 @@ DATA_CONFIG = {
 PATH_CONFIG = {
     'raw_data_path': 'data/raw/',
     'processed_data_path': 'data/processed/',
+    'results_path': 'data/results/',
 }
 
 # Synthetic financing parameters

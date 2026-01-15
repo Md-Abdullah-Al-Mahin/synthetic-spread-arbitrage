@@ -57,8 +57,7 @@ class SyntheticPricer:
     def estimate_spread_from_volatility(self,
                                         volatility: Union[float, pd.Series, pd.DataFrame],
                                         base_spread: Optional[float] = None,
-                                        vol_coefficient: Optional[float] = None) -> Union[
-        float, pd.Series, pd.DataFrame]:
+                                        vol_coefficient: Optional[float] = None) -> Union[float, pd.Series, pd.DataFrame]:
         """Estimate financing spread based on volatility"""
         base_spread = base_spread or self.base_spread
         vol_coefficient = vol_coefficient or self.vol_coefficient
@@ -78,7 +77,7 @@ class SyntheticPricer:
         spreads = self.estimate_spread_from_volatility(volatility, base_spread, vol_coefficient)
         stats_data = []
 
-        for ticker in spreads.columns:
+        for ticker in config.DATA_CONFIG['tickers']:
             ticker_spreads = spreads[ticker].dropna()
             ticker_vols = volatility[ticker].dropna()
 
@@ -96,32 +95,24 @@ class SyntheticPricer:
         return pd.DataFrame(stats_data).set_index('ticker')
 
     def calculate_dividend_impact(self,
-                                  prices: pd.DataFrame,
-                                  dividends: pd.DataFrame,
+                                  dividend_yield: pd.DataFrame,
                                   tax_rate: float = 0.30,
                                   position_days: int = 90) -> pd.DataFrame:
         """Calculate dividend impact difference between synthetic and cash positions"""
-        common_tickers = list(set(prices.columns) & set(dividends.columns))
-        if not common_tickers:
-            print("No common tickers found")
+        tickers = config.DATA_CONFIG['tickers']
+        if not tickers:
+            print("No tickers found")
             return pd.DataFrame()
 
         results = []
-        for ticker in common_tickers:
+        for ticker in tickers:
             try:
-                price_series = prices[ticker].dropna()
-                dividend_series = dividends[ticker].dropna()
+                dividend_yield_series = dividend_yield[ticker].dropna()
 
-                if price_series.empty or dividend_series.empty:
+                if dividend_yield_series.empty:
                     continue
 
-                current_date = price_series.index[-1]
-                one_year_ago = current_date - pd.DateOffset(years=1)
-                recent_dividends = dividend_series[dividend_series.index >= one_year_ago]
-                annual_dividend = recent_dividends.sum()
-                current_price = price_series.iloc[-1]
-
-                dividend_yield = annual_dividend / current_price
+                dividend_yield = dividend_yield_series.iloc[-1]
                 cash_yield = dividend_yield * (1 - tax_rate)
                 synthetic_yield = dividend_yield
                 advantage = synthetic_yield - cash_yield
@@ -132,8 +123,6 @@ class SyntheticPricer:
 
                 results.append({
                     'ticker': ticker,
-                    'current_price': current_price,
-                    'annual_dividend': annual_dividend,
                     'dividend_yield': dividend_yield,
                     'cash_yield': cash_yield,
                     'synthetic_yield': synthetic_yield,
@@ -166,8 +155,7 @@ class SyntheticPricer:
                                      vol_coefficient: Optional[float] = None) -> Dict[str, float]:
         """Calculate net financing cost including dividend impact"""
         spread = self.estimate_spread_from_volatility(volatility, base_spread, vol_coefficient)
-        financing_data = self.calculate_financing_cost(notional=notional, days=days, spread=spread,
-                                                       sofr_rate=sofr_rate)
+        financing_data = self.calculate_financing_cost(notional=notional, days=days, spread=spread,sofr_rate=sofr_rate)
 
         cash_yield = dividend_yield * (1 - tax_rate)
         synthetic_yield = dividend_yield
@@ -266,8 +254,6 @@ class SyntheticPricer:
                             **kwargs) -> pd.DataFrame:
         """Run cost analysis for multiple tickers"""
         results = []
-
-        self._log(f"Analyzing {len(tickers)} tickers...")
 
         for ticker in tickers:
             try:

@@ -121,22 +121,20 @@ def run_analysis(tickers: list = None,
         
         # Step 3: Statistical
         print("\nStep 3: Running statistical analysis...")
-        stats = StatisticalModels(verbose=False)
+        stats = StatisticalModels()
         statistical_results = stats.run_full_statistical_analysis(
             market_data=market_data,
             pricing_results=pricing_results,
             lookback_days=252
         )
         
-        # Step 4: Risk (optional)
+        # Step 4: Risk
         risk_results = None
         if run_risk_analysis:
             print("\nStep 4: Running risk analysis...")
             risk = RiskAnalytics()
             risk_results = risk.run_full_risk_analysis(
                 market_data=market_data,
-                pricing_results=pricing_results,
-                statistical_results=statistical_results,
                 position_value=position_value,
                 confidence_level=0.95,
                 risk_free_rate=0.045,
